@@ -1,46 +1,44 @@
-const activityData = [
-  {
-    UserID: 203,
-    UserName: "Akif Kazi",
-    UserSpecs: "LY",
-    Timestamp: "21 May 2025",
-    Items: [
-      { ItemName: "Copic Marker", ItemSpecs: "6 pc", Quantity: 2, Status: "", Notes: "" },
-      { ItemName: "Acrylic Paint", ItemSpecs: "12 pc", Quantity: 1, Status: "", Notes: "" }
-    ]
-  },
-  {
-    UserID: 635,
-    UserName: "Ann Varghese",
-    UserSpecs: "LY",
-    Timestamp: "22 May 2025",
-    Items: [
-      { ItemName: "Paint Brush", ItemSpecs: "Flat", Quantity: 1, Status: "", Notes: "" }
-    ]
-  }
-];
+const logs = await window.electronAPI.getActivity();
 
-function renderActivityLogs() {
+async function renderActivityLogs() {
   const logContainer = document.getElementById("activity-log");
   logContainer.innerHTML = "";
 
-  activityData.forEach(userLog => {
+  const activityData = await window.electronAPI.getActivity();
+
+  const grouped = {};
+
+  activityData.forEach(entry => {
+    const key = `${entry.UserID}|${entry.Timestamp}`;
+    if (!grouped[key]) {
+      grouped[key] = {
+        UserID: entry.UserID,
+        UserName: entry.UserName,
+        UserSpecs: entry.UserSpecs,
+        Timestamp: entry.Timestamp,
+        Items: []
+      };
+    }
+    grouped[key].Items.push(entry);
+  });
+
+  Object.values(grouped).forEach(group => {
     const block = document.createElement("div");
     block.className = "activity-user-block";
 
     const heading = document.createElement("h3");
-    heading.textContent = `${userLog.UserName} ${userLog.UserSpecs} — ${userLog.Timestamp}`;
+    heading.textContent = `${group.UserName} ${group.UserSpecs} — ${group.Timestamp}`; // ⏰ Date + Time
     block.appendChild(heading);
 
-    userLog.Items.forEach((item, idx) => {
+    group.Items.forEach((item, idx) => {
       const div = document.createElement("div");
       div.className = "log-entry";
       div.innerHTML = `
-        <strong>${item.ItemName}</strong> (${item.ItemSpecs}) — Quantity: ${item.Quantity}
+        <strong>${item.ItemName}</strong> (${item.ItemSpecs}) — Quantity: ${-item.QtyChanged}
         <br>
-        <button onclick="markUsed(${userLog.UserID}, ${idx})">Used Up</button>
-        <button onclick="markLost(${userLog.UserID}, ${idx})">Lost</button>
-        <input placeholder="Notes..." oninput="addNote(${userLog.UserID}, ${idx}, this.value)" value="${item.Notes}" />
+        <button onclick="markUsed(${group.UserID}, ${idx})">Used Up</button>
+        <button onclick="markLost(${group.UserID}, ${idx})">Lost</button>
+        <input placeholder="Notes..." value="${item.Notes || ""}" onchange="addNote(${group.UserID}, ${idx}, this.value)" />
       `;
       block.appendChild(div);
     });
