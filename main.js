@@ -2,6 +2,14 @@ const { app, BrowserWindow, Menu, dialog, ipcMain } = require("electron");
 const path = require("path");
 
 const { loadExcelFile, getInventory, getUsers } = require("./backend/inventoryStore");
+const {
+  addActivity,
+  getActivityLog,
+  exportActivityLog
+} = require("./backend/activityStore");
+
+ipcMain.handle("get-activity", () => getActivityLog());
+ipcMain.on("add-activity", (event, entry) => addActivity(entry));
 
 function createWindow() {
   const win = new BrowserWindow({
@@ -60,6 +68,26 @@ function createWindow() {
             }
             }
         }
+        },
+        {
+        label: 'Export',
+        submenu: [
+            {
+            label: 'Export Activity',
+            click: async () => {
+                const result = await dialog.showSaveDialog({
+                title: 'Save Activity Log',
+                defaultPath: "activity.xlsx",
+                filters: [{ name: 'Excel Files', extensions: ['xlsx'] }]
+                });
+
+                if (!result.canceled && result.filePath) {
+                exportActivityLog(result.filePath);
+                dialog.showMessageBox({ message: 'Activity log exported successfully.' });
+                }
+            }
+            }
+        ]
         },
         { type: 'separator' },
         { role: 'quit' }
