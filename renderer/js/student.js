@@ -150,6 +150,28 @@ function removeItem(index) {
 }
 
 function borrowItems() {
+  const currentUser = JSON.parse(localStorage.getItem("currentUser"));
+  const timestamp = new Date().toLocaleString();
+
+  cart.forEach(item => {
+    const logEntry = {
+      UserID: currentUser.UserID,
+      UserName: currentUser.UserName,
+      UserSpecs: currentUser.UserSpecs,
+      Action: "Borrowed",
+      ItemID: item.ItemID,
+      ItemName: item.ItemName,
+      ItemSpecs: item.ItemSpecs,
+      QtyChanged: -item.quantity,
+      QtyRemaining: item.Stock - item.quantity,
+      Timestamp: timestamp,
+      Notes: ""
+    };
+
+    window.electronAPI.addActivity(logEntry);
+  });
+
   alert(`You’ve borrowed ${cart.reduce((sum, i) => sum + i.quantity, 0)} items`);
-  location.href = "login.html";
+  localStorage.removeItem("currentUser");
+  window.location.href = "login.html";
 }
