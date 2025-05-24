@@ -58,3 +58,29 @@ body {
   justify-content: space-between;
   align-items: center;
 }
+
+/* staff css */
+
+.activity-user-block {
+  margin-top: 20px;
+  padding: 10px;
+  border: 2px solid #ddd;
+  border-radius: 8px;
+}
+
+.activity-user-block h3 {
+  margin-bottom: 10px;
+  font-size: 18px;
+}
+
+.log-entry {
+  padding: 10px;
+  margin: 10px 0;
+  border: 1px solid #aaa;
+  border-radius: 6px;
+  background-color: #f8f8f8;
+}
+
+.log-entry button {
+  margin-right: 8px;
+}
