@@ -89,6 +89,13 @@ function createWindow() {
             }
         ]
         },
+        {
+        label: 'Logout',
+        click: () => {
+            win.loadFile("renderer/login.html");
+            win.webContents.executeJavaScript('localStorage.clear()');
+        }
+        },
         { type: 'separator' },
         { role: 'quit' }
       ]
