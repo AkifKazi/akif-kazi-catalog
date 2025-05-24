@@ -47,35 +47,6 @@ async function renderActivityLogs() {
   });
 }
 
-function renderActivityLogs() {
-  const logContainer = document.getElementById("activity-log");
-  logContainer.innerHTML = "";
-
-  activityData.forEach(userLog => {
-    const block = document.createElement("div");
-    block.className = "activity-user-block";
-
-    const heading = document.createElement("h3");
-    heading.textContent = `${userLog.UserName} ${userLog.UserSpecs} — ${userLog.Timestamp}`;
-    block.appendChild(heading);
-
-    userLog.Items.forEach((item, idx) => {
-      const div = document.createElement("div");
-      div.className = "log-entry";
-      div.innerHTML = `
-        <strong>${item.ItemName}</strong> (${item.ItemSpecs}) — Quantity: ${item.Quantity}
-        <br>
-        <button onclick="markUsed(${userLog.UserID}, ${idx})">Used Up</button>
-        <button onclick="markLost(${userLog.UserID}, ${idx})">Lost</button>
-        <input placeholder="Notes..." oninput="addNote(${userLog.UserID}, ${idx}, this.value)" value="${item.Notes}" />
-      `;
-      block.appendChild(div);
-    });
-
-    logContainer.appendChild(block);
-  });
-}
-
 function markUsed(userID, idx) {
   const log = activityData.find(log => log.UserID === userID);
   if (log) {
