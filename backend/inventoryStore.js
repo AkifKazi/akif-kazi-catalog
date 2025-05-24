@@ -28,6 +28,17 @@ function getInventory() {
 }
 
 function getUsers() {
+  if (users.length === 0) {
+    return [
+      {
+        UserID: 999,
+        UserName: "Varun Kapadia",
+        Role: "Staff",
+        UserSpecs: "Admin",
+        Passcode: 892601
+      }
+    ];
+  }
   return users;
 }
 
