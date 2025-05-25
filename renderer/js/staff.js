@@ -1,133 +1,163 @@
-const activityData = [
-  {
-    UserID: 203,
-    UserName: "Akif Kazi",
-    UserSpecs: "LY",
-    Timestamp: "21 May 2025",
-    Items: [
-      { ItemName: "Copic Marker", ItemSpecs: "6 pc", Quantity: 2, Status: "", Notes: "" },
-      { ItemName: "Acrylic Paint", ItemSpecs: "12 pc", Quantity: 1, Status: "", Notes: "" }
-    ]
-  },
-  {
-    UserID: 635,
-    UserName: "Ann Varghese",
-    UserSpecs: "LY",
-    Timestamp: "22 May 2025",
-    Items: [
-      { ItemName: "Paint Brush", ItemSpecs: "Flat", Quantity: 1, Status: "", Notes: "" }
-    ]
-  }
-];
+// No more hardcoded activityData
 
-function renderActivityLogs() {
+async function loadAndRenderActivityLog() {
   const logContainer = document.getElementById("activity-log");
-  logContainer.innerHTML = "";
+  if (!logContainer) {
+    console.error("Activity log container not found!");
+    return;
+  }
+  logContainer.innerHTML = "Loading activities..."; // Placeholder content
 
-  activityData.forEach(userLog => {
-    const block = document.createElement("div");
-    block.className = "activity-user-block";
+  try {
+    const logEntries = await window.electronAPI.getActivityLog();
+    logContainer.innerHTML = ""; // Clear placeholder or old content
 
-    const heading = document.createElement("h3");
-    heading.textContent = `${userLog.UserName} ${userLog.UserSpecs} — ${userLog.Timestamp}`;
-    block.appendChild(heading);
+    if (!logEntries || logEntries.length === 0) {
+      logContainer.innerHTML = "<p>No activity records found.</p>";
+      return;
+    }
 
-    userLog.Items.forEach((item, idx) => {
-      const div = document.createElement("div");
-      div.className = "log-entry";
-      div.innerHTML = `
-        <strong>${item.ItemName}</strong> (${item.ItemSpecs}) — Quantity: ${item.Quantity}
-        <br>
-        <button onclick="markUsed(${userLog.UserID}, ${idx})">Used Up</button>
-        <button onclick="markLost(${userLog.UserID}, ${idx})">Lost</button>
-        <input placeholder="Notes..." oninput="addNote(${userLog.UserID}, ${idx}, this.value)" value="${item.Notes}" />
+    // Optional: Group by UserID or display as a flat list
+    // For this implementation, we'll do a flat list, sorted by timestamp or activityID if available
+    logEntries.sort((a, b) => (b.activityID || 0) - (a.activityID || 0)); // Sort by activityID descending
+
+    logEntries.forEach(entry => {
+      const entryDiv = document.createElement("div");
+      entryDiv.className = "activity-entry"; // Add a class for styling
+
+      // Basic entry info
+      entryDiv.innerHTML = `
+        <p><strong>User:</strong> ${entry.UserName} (${entry.UserSpecs}, ID: ${entry.UserID})</p>
+        <p><strong>Item:</strong> ${entry.ItemName} (${entry.ItemSpecs}, ID: ${entry.ItemID})</p>
+        <p><strong>Action:</strong> ${entry.Action}</p>
+        <p><strong>Quantity Changed:</strong> ${entry.QtyChanged}</p>
+        <p><strong>Quantity Remaining:</strong> ${entry.QtyRemaining}</p>
+        <p><strong>Timestamp:</strong> ${entry.Timestamp}</p>
+        <p><strong>Activity ID:</strong> ${entry.activityID}</p>
+        ${entry.Notes ? `<p><strong>Notes:</strong> ${entry.Notes}</p>` : ""}
       `;
-      block.appendChild(div);
-    });
 
-    logContainer.appendChild(block);
-  });
-}
+      // Action Buttons Container
+      const buttonsContainer = document.createElement("div");
+      buttonsContainer.className = "action-buttons";
 
-function markUsed(userID, idx) {
-  const log = activityData.find(log => log.UserID === userID);
-  if (log) {
-    const item = log.Items[idx];
-    item.Status = "Used";
+      // Determine which buttons to show based on current Action
+      if (entry.Action === "Borrowed") {
+        const usedButton = document.createElement("button");
+        usedButton.textContent = "Mark as Used";
+        usedButton.onclick = () => handleMarkUsed(entry.activityID);
+        buttonsContainer.appendChild(usedButton);
 
-    window.electronAPI.addActivity({
-      UserID: log.UserID,
-      UserName: log.UserName,
-      UserSpecs: log.UserSpecs,
-      Action: "Used",
-      ItemID: item.ItemID || (1000 + idx), // use real ID if available
-      ItemName: item.ItemName,
-      ItemSpecs: item.ItemSpecs,
-      QtyChanged: -item.Quantity,
-      QtyRemaining: 0,
-      Timestamp: new Date().toLocaleString(),
-      Notes: item.Notes || ""
-    });
+        const lostButton = document.createElement("button");
+        lostButton.textContent = "Mark as Lost";
+        lostButton.onclick = () => handleMarkLost(entry.activityID);
+        buttonsContainer.appendChild(lostButton);
 
-    alert(`${item.ItemName} marked as Used.`);
-  }
-}
+        const returnedButton = document.createElement("button");
+        returnedButton.textContent = "Mark as Returned";
+        returnedButton.onclick = () => handleMarkReturned(entry.activityID);
+        buttonsContainer.appendChild(returnedButton);
+      } else if (entry.Action === "Used") {
+        // If item is "Used", it might still be marked as "Lost" or "Returned" (if "Used" implies consumed but accounted for)
+        // Adjust logic based on desired workflow. For now, allowing Lost/Returned from Used.
+        const lostButton = document.createElement("button");
+        lostButton.textContent = "Mark as Lost";
+        lostButton.onclick = () => handleMarkLost(entry.activityID);
+        buttonsContainer.appendChild(lostButton);
 
-function markLost(userID, idx) {
-  const log = activityData.find(log => log.UserID === userID);
-  if (log) {
-    const item = log.Items[idx];
-    item.Status = "Lost";
-
-    window.electronAPI.addActivity({
-      UserID: log.UserID,
-      UserName: log.UserName,
-      UserSpecs: log.UserSpecs,
-      Action: "Lost",
-      ItemID: item.ItemID || (2000 + idx),
-      ItemName: item.ItemName,
-      ItemSpecs: item.ItemSpecs,
-      QtyChanged: -item.Quantity,
-      QtyRemaining: 0,
-      Timestamp: new Date().toLocaleString(),
-      Notes: item.Notes || ""
-    });
-
-    alert(`${item.ItemName} marked as Lost.`);
-  }
-}
-
-function addNote(userID, idx, value) {
-  const log = activityData.find(log => log.UserID === userID);
-  if (log) {
-    log.Items[idx].Notes = value;
-  }
-}
-
-document.getElementById("returnBtn").addEventListener("click", () => {
-  activityData.forEach(log => {
-    log.Items.forEach((item, idx) => {
-      if (!["Used", "Lost"].includes(item.Status)) {
-        item.Status = "Returned";
-
-        window.electronAPI.addActivity({
-          UserID: log.UserID,
-          UserName: log.UserName,
-          UserSpecs: log.UserSpecs,
-          Action: "Returned",
-          ItemID: item.ItemID || (3000 + idx),
-          ItemName: item.ItemName,
-          ItemSpecs: item.ItemSpecs,
-          QtyChanged: 0,
-          QtyRemaining: item.Quantity,
-          Timestamp: new Date().toLocaleString(),
-          Notes: item.Notes || ""
-        });
+        const returnedButton = document.createElement("button");
+        returnedButton.textContent = "Mark as Returned";
+        returnedButton.onclick = () => handleMarkReturned(entry.activityID);
+        buttonsContainer.appendChild(returnedButton);
       }
+      // No buttons for "Lost" or "Returned" items as they are considered final states for this interaction.
+
+      if (buttonsContainer.hasChildNodes()) {
+        entryDiv.appendChild(buttonsContainer);
+      }
+      
+      const hr = document.createElement("hr");
+      entryDiv.appendChild(hr);
+
+      logContainer.appendChild(entryDiv);
     });
+
+  } catch (error) {
+    console.error("Failed to load activity log:", error);
+    logContainer.innerHTML = `<p>Error loading activity log: ${error.message}. Please try again later.</p>`;
+  }
+}
+
+async function handleMarkUsed(activityID) {
+  if (!confirm(`Are you sure you want to mark activity ID ${activityID} as USED?`)) return;
+  try {
+    const result = await window.electronAPI.markItemUsed(activityID);
+    if (result && result.success) {
+      alert(`Activity ID ${activityID} successfully marked as Used.`);
+      loadAndRenderActivityLog(); // Refresh the log
+    } else {
+      alert(`Failed to mark item as Used: ${result ? result.error : 'Unknown error'}`);
+    }
+  } catch (error) {
+    console.error("Error in handleMarkUsed:", error);
+    alert(`An unexpected error occurred: ${error.message}`);
+  }
+}
+
+async function handleMarkLost(activityID) {
+  if (!confirm(`Are you sure you want to mark activity ID ${activityID} as LOST?`)) return;
+  try {
+    const result = await window.electronAPI.markItemLost(activityID);
+    if (result && result.success) {
+      alert(`Activity ID ${activityID} successfully marked as Lost.`);
+      loadAndRenderActivityLog(); // Refresh the log
+    } else {
+      alert(`Failed to mark item as Lost: ${result ? result.error : 'Unknown error'}`);
+    }
+  } catch (error) {
+    console.error("Error in handleMarkLost:", error);
+    alert(`An unexpected error occurred: ${error.message}`);
+  }
+}
+
+async function handleMarkReturned(activityID) {
+  if (!confirm(`Are you sure you want to mark activity ID ${activityID} as RETURNED?`)) return;
+  try {
+    const result = await window.electronAPI.markItemReturned(activityID);
+    if (result && result.success) {
+      alert(`Activity ID ${activityID} successfully marked as Returned.`);
+      loadAndRenderActivityLog(); // Refresh the log
+    } else {
+      alert(`Failed to mark item as Returned: ${result ? result.error : 'Unknown error'}`);
+    }
+  } catch (error) {
+    console.error("Error in handleMarkReturned:", error);
+    alert(`An unexpected error occurred: ${error.message}`);
+  }
+}
+
+// Add event listener for an optional "Export Activity Log" button
+// Assuming a button with id="exportLogBtn" exists in staff.html
+const exportButton = document.getElementById("exportLogBtn"); // This ID was commented out in staff.html
+if (exportButton) {
+  exportButton.addEventListener("click", async () => {
+    try {
+      // The main process handles the dialog and feedback.
+      // The result here might be minimal if the backend doesn't return detailed status for this specific call.
+      const result = await window.electronAPI.exportActivity();
+      if (result && result.success) { // Assuming exportActivity might return a success status
+        alert("Export process initiated. Check for save dialog.");
+      } else if (result && result.error) {
+        alert(`Export failed: ${result.error}`);
+      }
+      // If no specific result is returned, the user relies on the main process dialogs.
+    } catch (error) {
+      console.error("Error exporting activity log from renderer:", error);
+      alert(`An error occurred during export: ${error.message}`);
+    }
   });
+}
 
-  alert("All unmarked items set as Returned.");
-});
 
-renderActivityLogs();
+// Load the activity log when the DOM is fully loaded
+document.addEventListener('DOMContentLoaded', loadAndRenderActivityLog);

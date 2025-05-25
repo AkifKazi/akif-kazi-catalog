@@ -149,29 +149,93 @@ function removeItem(index) {
   renderCart();
 }
 
-function borrowItems() {
+async function borrowItems() {
   const currentUser = JSON.parse(localStorage.getItem("currentUser"));
+  if (!currentUser) {
+    alert("User not logged in. Redirecting to login page.");
+    window.location.href = "login.html";
+    return;
+  }
+
+  if (cart.length === 0) {
+    alert("Your cart is empty. Please add items to borrow.");
+    return;
+  }
+
   const timestamp = new Date().toLocaleString();
+  let allItemsProcessedSuccessfully = true;
+  let borrowedItemsCount = 0;
 
-  cart.forEach(item => {
-    const logEntry = {
-      UserID: currentUser.UserID,
-      UserName: currentUser.UserName,
-      UserSpecs: currentUser.UserSpecs,
-      Action: "Borrowed",
-      ItemID: item.ItemID,
-      ItemName: item.ItemName,
-      ItemSpecs: item.ItemSpecs,
-      QtyChanged: -item.quantity,
-      QtyRemaining: item.Stock - item.quantity,
-      Timestamp: timestamp,
-      Notes: ""
-    };
+  for (const cartItem of cart) {
+    try {
+      // 1. Update Stock
+      // Ensure ItemID is passed as the correct type if necessary (e.g., Number(cartItem.ItemID))
+      // For now, assuming ItemID is already in the correct format from inventory loading.
+      const stockUpdateResult = await window.electronAPI.updateItemStock(cartItem.ItemID, -cartItem.quantity);
+      if (!stockUpdateResult || !stockUpdateResult.success) {
+        alert(`Failed to update stock for ${cartItem.ItemName}: ${stockUpdateResult.error || 'Unknown error during stock update.'}`);
+        allItemsProcessedSuccessfully = false;
+        break; // Stop processing further items
+      }
 
-    window.electronAPI.addActivity(logEntry);
-  });
+      // 2. Add Activity Log
+      const logEntry = {
+        UserID: currentUser.UserID,
+        UserName: currentUser.UserName,
+        UserSpecs: currentUser.UserSpecs,
+        Action: "Borrowed",
+        ItemID: cartItem.ItemID, // Ensure this is the correct ID from the item object
+        ItemName: cartItem.ItemName,
+        ItemSpecs: cartItem.ItemSpecs,
+        QtyChanged: -cartItem.quantity,
+        QtyRemaining: stockUpdateResult.newStock, // Use newStock from the update result
+        Timestamp: timestamp,
+        Notes: "" // Or any other notes
+      };
+      const activityAddResult = await window.electronAPI.addActivity(logEntry);
+      if (!activityAddResult || !activityAddResult.success) {
+         alert(`Failed to log borrowing activity for ${cartItem.ItemName}: ${activityAddResult.error || 'Unknown error during activity logging.'}`);
+         allItemsProcessedSuccessfully = false;
+         // Optional: Implement logic to revert stock update for cartItem.ItemID if activity logging fails
+         // For now, we stop and the stock for this item remains updated.
+         break; 
+      }
+      borrowedItemsCount += cartItem.quantity;
 
-  alert(`You’ve borrowed ${cart.reduce((sum, i) => sum + i.quantity, 0)} items`);
-  localStorage.removeItem("currentUser");
-  window.location.href = "login.html";
+    } catch (error) {
+      console.error(`Error during borrowing process for item ${cartItem.ItemName}:`, error);
+      alert(`An unexpected error occurred while borrowing ${cartItem.ItemName}. Please try again or contact support if the issue persists.`);
+      allItemsProcessedSuccessfully = false;
+      break;
+    }
+  }
+
+  if (allItemsProcessedSuccessfully && cart.length > 0) {
+    alert(`You’ve successfully borrowed ${borrowedItemsCount} items.`);
+    cart = []; // Clear cart
+    renderCart(); // Update UI
+    
+    // Logout
+    localStorage.removeItem("currentUser");
+    // Ensure user-info is cleared or updated if necessary
+    const userInfoElement = document.getElementById("user-info");
+    if(userInfoElement) userInfoElement.textContent = "No user logged in"; 
+
+    window.location.href = "login.html";
+
+  } else if (!allItemsProcessedSuccessfully && cart.length > 0) {
+    // This case means some items might have been processed, some not.
+    // The loop breaks on first error, so stock for subsequent items is not affected.
+    // Activity for failed item is not logged.
+    // User is already alerted about the specific error.
+    // No full rollback implemented, so any prior successful stock updates/activity logs persist.
+    // You might want to refresh inventory data here or guide user to check their activity.
+    alert("Some items could not be processed. Please review your cart and try again, or check your activity log for details.");
+    // Potentially refresh inventory to reflect any committed changes
+    // window.electronAPI.getInventory().then(data => {
+    //   inventory = data;
+    //   fuse.setCollection(inventory);
+    // });
+  }
+  // If cart was empty initially, the first check in the function handles it.
 }
