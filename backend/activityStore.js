@@ -9,20 +9,34 @@ function addActivity(entry) {
 
 function markUsed(userID, itemID) {
   const item = activityLog.find(i => i.UserID === userID && i.ItemID === itemID && i.Action === "Borrowed");
-  if (item) item.Action = "Used";
+  if (item) {
+    item.Action = "Used";
+    return true;
+  }
+  return false;
 }
 
 function markLost(userID, itemID) {
   const item = activityLog.find(i => i.UserID === userID && i.ItemID === itemID && i.Action === "Borrowed");
-  if (item) item.Action = "Lost";
+  if (item) {
+    item.Action = "Lost";
+    return true;
+  }
+  return false;
 }
 
 function returnItemsFor(userID) {
+  let itemsReturned = 0;
   activityLog.forEach(item => {
     if (item.UserID === userID && item.Action === "Borrowed") {
       item.Action = "Returned";
+      itemsReturned++;
     }
   });
+  // As per instructions, returning true indicating the operation was attempted.
+  // Alternatively, could return itemsReturned > 0 or itemsReturned count.
+  // Sticking to `true` for simplicity as requested.
+  return true;
 }
 
 function getActivityLog() {

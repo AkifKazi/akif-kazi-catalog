@@ -5,11 +5,45 @@ const { loadExcelFile, getInventory, getUsers } = require("./backend/inventorySt
 const {
   addActivity,
   getActivityLog,
-  exportActivityLog
+  exportActivityLog,
+  markUsed,
+  markLost,
+  returnItemsFor
 } = require("./backend/activityStore");
 
 ipcMain.handle("get-activity", () => getActivityLog());
 ipcMain.on("add-activity", (event, entry) => addActivity(entry));
+
+// IPC handlers for marking items and returning items for a user
+ipcMain.handle("mark-item-used", async (event, userID, itemID) => {
+  try {
+    const success = markUsed(userID, itemID); // from activityStore
+    return { success: success };
+  } catch (error) {
+    console.error("Error marking item as used:", error);
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle("mark-item-lost", async (event, userID, itemID) => {
+  try {
+    const success = markLost(userID, itemID); // from activityStore
+    return { success: success };
+  } catch (error) {
+    console.error("Error marking item as lost:", error);
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle("return-items-for-user", async (event, userID) => {
+  try {
+    const success = returnItemsFor(userID); // from activityStore
+    return { success: success }; // Assuming returnItemsFor now returns true
+  } catch (error) {
+    console.error("Error returning items for user:", error);
+    return { success: false, error: error.message };
+  }
+});
 
 function createWindow() {
   const win = new BrowserWindow({
