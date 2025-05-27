@@ -75,7 +75,8 @@ function renderSuggestions() {
   suggestions.forEach((item, idx) => {
     const li = document.createElement("li");
     li.textContent = `${item.ItemName} — ${item.ItemSpecs}`;
-    if (item.Stock <= 0) {
+    // Use item.QtyRemaining from the inventory list
+    if (item.QtyRemaining <= 0) {
       li.style.border = "1px solid red";
     }
     if (idx === selectedIndex) {
@@ -86,18 +87,22 @@ function renderSuggestions() {
 }
 
 function addToCart(item) {
-  const found = cart.find(c => c.ItemID === item.ItemID);
-  if (found) {
-    if (found.quantity < item.Stock) {
-      found.quantity++;
+  // 'item' here is from the main inventory list (suggestions)
+  const foundInCart = cart.find(c => c.ItemID === item.ItemID);
+  if (foundInCart) {
+    // Use QtyRemaining from the item object stored in the cart for comparison
+    if (foundInCart.quantity < foundInCart.QtyRemaining) {
+      foundInCart.quantity++;
     } else {
-      alert(`Max quantity reached (${item.Stock})`);
+      alert(`Max quantity reached (${foundInCart.QtyRemaining}) for ${foundInCart.ItemName}.`);
     }
   } else {
-    if (item.Stock > 0) {
-      cart.push({ ...item, quantity: 1 });
+    // Use QtyRemaining from the inventory item for initial add
+    if (item.QtyRemaining > 0) {
+      // Store the item's current QtyRemaining in the cart item itself
+      cart.push({ ...item, quantity: 1 }); // This copies ItemID, ItemName, ItemSpecs, and QtyRemaining
     } else {
-      alert("Item is out of stock");
+      alert(`${item.ItemName} is out of stock.`);
     }
   }
   renderCart();
@@ -105,14 +110,14 @@ function addToCart(item) {
 
 function renderCart() {
   cartDiv.innerHTML = "";
-  cart.forEach((item, idx) => {
+  cart.forEach((cartItem, idx) => { // cartItem here includes QtyRemaining
     const div = document.createElement("div");
     div.classList.add("cart-item");
     div.innerHTML = `
-      ${item.ItemName} (${item.ItemSpecs}) 
+      ${cartItem.ItemName} (${cartItem.ItemSpecs}) 
       <button onclick="updateQty(${idx}, -1)">-</button>
-      <input value="${item.quantity}" onchange="manualQty(${idx}, this.value)" style="width: 40px;" />
-      <button onclick="updateQty(${idx}, 1)" ${item.quantity >= item.Stock ? "disabled" : ""}>+</button>
+      <input value="${cartItem.quantity}" onchange="manualQty(${idx}, this.value)" style="width: 40px;" />
+      <button onclick="updateQty(${idx}, 1)" ${cartItem.quantity >= cartItem.QtyRemaining ? "disabled" : ""}>+</button>
       <button onclick="removeItem(${idx})">x</button>
     `;
     cartDiv.appendChild(div);
@@ -120,27 +125,32 @@ function renderCart() {
 }
 
 function updateQty(index, delta) {
-  const item = cart[index];
-  const newQty = item.quantity + delta;
-  if (newQty > item.Stock) {
-    alert(`Max quantity is ${item.Stock}`);
+  const cartItem = cart[index]; // cartItem includes QtyRemaining
+  const newQty = cartItem.quantity + delta;
+
+  if (newQty > cartItem.QtyRemaining) {
+    alert(`Max quantity for ${cartItem.ItemName} is ${cartItem.QtyRemaining}.`);
   } else if (newQty <= 0) {
-    cart.splice(index, 1);
+    cart.splice(index, 1); // Remove item if quantity is zero or less
   } else {
-    item.quantity = newQty;
+    cartItem.quantity = newQty;
   }
   renderCart();
 }
 
 function manualQty(index, value) {
-  const item = cart[index];
+  const cartItem = cart[index]; // cartItem includes QtyRemaining
   let qty = parseInt(value);
-  if (isNaN(qty) || qty <= 0) qty = 1;
-  if (qty > item.Stock) {
-    alert(`Max quantity is ${item.Stock}`);
-    qty = item.Stock;
+
+  if (isNaN(qty) || qty <= 0) {
+    qty = 1; // Default to 1 if invalid input or less than 1
   }
-  item.quantity = qty;
+  
+  if (qty > cartItem.QtyRemaining) {
+    alert(`Max quantity for ${cartItem.ItemName} is ${cartItem.QtyRemaining}. You entered ${value}.`);
+    qty = cartItem.QtyRemaining; // Cap at max available
+  }
+  cartItem.quantity = qty;
   renderCart();
 }
 
@@ -168,43 +178,35 @@ async function borrowItems() {
 
   for (const cartItem of cart) {
     try {
-      // 1. Update Stock
-      // Ensure ItemID is passed as the correct type if necessary (e.g., Number(cartItem.ItemID))
-      // For now, assuming ItemID is already in the correct format from inventory loading.
-      const stockUpdateResult = await window.electronAPI.updateItemStock(cartItem.ItemID, -cartItem.quantity);
-      if (!stockUpdateResult || !stockUpdateResult.success) {
-        alert(`Failed to update stock for ${cartItem.ItemName}: ${stockUpdateResult.error || 'Unknown error during stock update.'}`);
-        allItemsProcessedSuccessfully = false;
-        break; // Stop processing further items
-      }
-
-      // 2. Add Activity Log
+      // Construct logEntry WITHOUT QtyRemaining.
+      // Qty should be the positive quantity being borrowed.
       const logEntry = {
         UserID: currentUser.UserID,
         UserName: currentUser.UserName,
         UserSpecs: currentUser.UserSpecs,
         Action: "Borrowed",
-        ItemID: cartItem.ItemID, // Ensure this is the correct ID from the item object
+        ItemID: cartItem.ItemID,
         ItemName: cartItem.ItemName,
         ItemSpecs: cartItem.ItemSpecs,
-        QtyChanged: -cartItem.quantity,
-        QtyRemaining: stockUpdateResult.newStock, // Use newStock from the update result
+        Qty: cartItem.quantity, // Positive quantity borrowed
         Timestamp: timestamp,
         Notes: "" // Or any other notes
+        // QtyRemaining is removed from here; main.js will handle it
       };
+
+      // Call addActivity (which now internally handles inventory update first in main.js)
       const activityAddResult = await window.electronAPI.addActivity(logEntry);
+      
       if (!activityAddResult || !activityAddResult.success) {
-         alert(`Failed to log borrowing activity for ${cartItem.ItemName}: ${activityAddResult.error || 'Unknown error during activity logging.'}`);
+         alert(`Failed to process borrowing for ${cartItem.ItemName}: ${activityAddResult.error || 'Unknown error.'}`);
          allItemsProcessedSuccessfully = false;
-         // Optional: Implement logic to revert stock update for cartItem.ItemID if activity logging fails
-         // For now, we stop and the stock for this item remains updated.
          break; 
       }
       borrowedItemsCount += cartItem.quantity;
 
     } catch (error) {
       console.error(`Error during borrowing process for item ${cartItem.ItemName}:`, error);
-      alert(`An unexpected error occurred while borrowing ${cartItem.ItemName}. Please try again or contact support if the issue persists.`);
+      alert(`An unexpected error occurred while borrowing ${cartItem.ItemName}. Please try again or contact support.`);
       allItemsProcessedSuccessfully = false;
       break;
     }
@@ -217,25 +219,19 @@ async function borrowItems() {
     
     // Logout
     localStorage.removeItem("currentUser");
-    // Ensure user-info is cleared or updated if necessary
     const userInfoElement = document.getElementById("user-info");
     if(userInfoElement) userInfoElement.textContent = "No user logged in"; 
 
     window.location.href = "login.html";
 
   } else if (!allItemsProcessedSuccessfully && cart.length > 0) {
-    // This case means some items might have been processed, some not.
-    // The loop breaks on first error, so stock for subsequent items is not affected.
-    // Activity for failed item is not logged.
-    // User is already alerted about the specific error.
-    // No full rollback implemented, so any prior successful stock updates/activity logs persist.
-    // You might want to refresh inventory data here or guide user to check their activity.
     alert("Some items could not be processed. Please review your cart and try again, or check your activity log for details.");
-    // Potentially refresh inventory to reflect any committed changes
-    // window.electronAPI.getInventory().then(data => {
-    //   inventory = data;
-    //   fuse.setCollection(inventory);
-    // });
+    // Refresh inventory to reflect any committed changes and current QtyRemaining
+    window.electronAPI.getInventory().then(data => {
+      inventory = data;
+      fuse.setCollection(inventory);
+      // Optionally, you might want to re-validate cart items here against new inventory.
+      // For now, just refreshing the main inventory list.
+    });
   }
-  // If cart was empty initially, the first check in the function handles it.
 }

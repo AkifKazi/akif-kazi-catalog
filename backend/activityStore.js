@@ -42,62 +42,70 @@ function saveActivityLog() {
 
 loadActivityLog(); // Load data when the module is initialized
 
+// addActivity is used for "Borrowed" actions primarily from student.js
+// It expects entry.Qty (positive) and entry.QtyRemaining (overall item qty remaining)
 function addActivity(entry) {
   try {
-    entry.activityID = nextActivityId++;
-    activityLog.push(entry);
+    const newEntry = { ...entry }; // Clone to avoid modifying the original object if passed by reference
+    newEntry.activityID = nextActivityId++;
+    
+    // Ensure Qty is positive, as per requirements
+    if (newEntry.Qty !== undefined) {
+        newEntry.Qty = Math.abs(Number(newEntry.Qty) || 0);
+    } else {
+        console.warn("addActivity: Qty is undefined. Defaulting to 0.");
+        newEntry.Qty = 0;
+    }
+
+    // QtyRemaining is passed in and should be stored as is.
+    // newEntry.QtyRemaining should already be set from the caller.
+
+    activityLog.push(newEntry);
     saveActivityLog();
-    return { success: true, activityID: entry.activityID };
+    return { success: true, newActivity: newEntry };
   } catch (error) {
     console.error("Error in addActivity:", error);
     return { success: false, error: error.message };
   }
 }
 
-function markItemUsedByActivityID(activityID) {
-  const activity = activityLog.find(a => a.activityID === activityID);
-  if (activity) {
-    if (activity.Action === "Borrowed") { // Can only mark "Borrowed" items as "Used"
-      activity.Action = "Used";
-      // Optionally, add/update a timestamp for this specific action
-      // activity.lastModified = new Date().toISOString(); 
-      saveActivityLog();
-      return { success: true };
-    } else {
-      return { success: false, error: `Activity ${activityID} is not in 'Borrowed' state, cannot mark as 'Used'. Current state: ${activity.Action}` };
-    }
+// Generic function for staff to record actions (Used, Lost, Returned)
+function recordStaffAction(details, actionType) {
+  try {
+    const newEntry = {
+      activityID: nextActivityId++,
+      UserID: details.UserID,
+      UserName: details.UserName,
+      UserSpecs: details.UserSpecs,
+      Action: actionType, // "Returned", "Used", "Lost"
+      ItemID: details.ItemID,
+      ItemName: details.ItemName,
+      ItemSpecs: details.ItemSpecs,
+      Qty: Math.abs(Number(details.Qty) || 0), // Ensure Qty is positive
+      QtyRemaining: details.QtyRemainingForItem, // Overall item quantity remaining
+      Timestamp: new Date().toLocaleString(),
+      originalBorrowActivityID: details.originalBorrowActivityID || null,
+      Notes: details.Notes || ""
+    };
+    activityLog.push(newEntry);
+    saveActivityLog();
+    return { success: true, newActivity: newEntry };
+  } catch (error) {
+    console.error(`Error in recordStaffAction (${actionType}):`, error);
+    return { success: false, error: error.message };
   }
-  return { success: false, error: `Activity with ID ${activityID} not found.` };
 }
 
-function markItemLostByActivityID(activityID) {
-  const activity = activityLog.find(a => a.activityID === activityID);
-  if (activity) {
-     if (activity.Action === "Borrowed" || activity.Action === "Used") { // Can only mark "Borrowed" or "Used" items as "Lost"
-      activity.Action = "Lost";
-      // activity.lastModified = new Date().toISOString();
-      saveActivityLog();
-      return { success: true };
-    } else {
-      return { success: false, error: `Activity ${activityID} is not in 'Borrowed' or 'Used' state, cannot mark as 'Lost'. Current state: ${activity.Action}` };
-    }
-  }
-  return { success: false, error: `Activity with ID ${activityID} not found.` };
+function recordStaffReturn(details) {
+  return recordStaffAction(details, "Returned");
 }
 
-function markItemReturnedByActivityID(activityID) {
-  const activity = activityLog.find(a => a.activityID === activityID);
-  if (activity) {
-    if (activity.Action === "Borrowed" || activity.Action === "Used") { // Can only mark "Borrowed" or "Used" items as "Returned"
-      activity.Action = "Returned";
-      // activity.lastModified = new Date().toISOString();
-      saveActivityLog();
-      return { success: true };
-    } else {
-      return { success: false, error: `Activity ${activityID} is not in 'Borrowed' or 'Used' state, cannot mark as 'Returned'. Current state: ${activity.Action}` };
-    }
-  }
-  return { success: false, error: `Activity with ID ${activityID} not found.` };
+function recordStaffUsed(details) {
+  return recordStaffAction(details, "Used");
+}
+
+function recordStaffLost(details) {
+  return recordStaffAction(details, "Lost");
 }
 
 function getActivityLog() {
@@ -105,18 +113,29 @@ function getActivityLog() {
 }
 
 function exportActivityLog(filepath) {
-  const worksheet = XLSX.utils.json_to_sheet(activityLog);
+  // Filter for "Returned", "Used", "Lost" actions
+  const filteredLog = activityLog.filter(entry => 
+    ["Returned", "Used", "Lost"].includes(entry.Action)
+  );
+
+  // Ensure Qty is positive and correctly named for export if it wasn't already
+  const exportData = filteredLog.map(entry => ({
+    ...entry,
+    Qty: Math.abs(Number(entry.Qty) || 0) // Ensure Qty is positive for export
+  }));
+
+  const worksheet = XLSX.utils.json_to_sheet(exportData);
   const workbook = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(workbook, worksheet, "Activity");
+  XLSX.utils.book_append_sheet(workbook, worksheet, "StaffActions"); // Changed sheet name
   XLSX.writeFile(workbook, filepath);
 }
 
 module.exports = {
-  addActivity,
+  addActivity, // For "Borrowed" logs
   getActivityLog,
-  markItemUsedByActivityID,
-  markItemLostByActivityID,
-  markItemReturnedByActivityID,
+  recordStaffReturn,
+  recordStaffUsed,
+  recordStaffLost,
   exportActivityLog
   // saveActivityLog // Not explicitly required to be exported
 };

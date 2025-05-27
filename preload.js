@@ -4,13 +4,11 @@ contextBridge.exposeInMainWorld("electronAPI", {
   // Inventory Store
   getInventory: () => ipcRenderer.invoke("get-inventory"),
   getUsers: () => ipcRenderer.invoke("get-users"),
-  updateItemStock: (itemID, quantityChange) => ipcRenderer.invoke("update-item-stock", itemID, quantityChange),
+  // updateItemStock was removed
 
   // Activity Store
-  addActivity: (entry) => ipcRenderer.invoke("add-activity", entry),
+  addActivity: (entry) => ipcRenderer.invoke("add-activity", entry), // For "Borrowed" actions
   getActivityLog: () => ipcRenderer.invoke("get-activity-log"),
-  markItemUsed: (activityID) => ipcRenderer.invoke("mark-item-used", activityID),
-  markItemLost: (activityID) => ipcRenderer.invoke("mark-item-lost", activityID),
-  markItemReturned: (activityID) => ipcRenderer.invoke("mark-item-returned", activityID),
+  recordStaffAction: (details) => ipcRenderer.invoke("record-staff-action", details), // For "Returned", "Used", "Lost"
   exportActivity: () => ipcRenderer.invoke("export-activity-log")
 });

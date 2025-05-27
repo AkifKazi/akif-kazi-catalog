@@ -62,10 +62,72 @@ function loadExcelFile(filePath, type = "inventory") {
     const data = XLSX.utils.sheet_to_json(sheet);
 
     if (type === "inventory") {
-      inventory = data;
+      const processedInventory = data.map(row => {
+        const newRow = { ...row }; // Copy existing properties
+
+        let stockValue = 0;
+        let stockColumnName = null;
+
+        // Case-insensitive search for 'Stock' column
+        for (const key in newRow) {
+          if (key.toLowerCase() === 'stock') {
+            stockColumnName = key;
+            break;
+          }
+        }
+
+        if (stockColumnName && newRow[stockColumnName] !== undefined) {
+          const parsedStock = Number(newRow[stockColumnName]);
+          if (!isNaN(parsedStock)) {
+            stockValue = parsedStock;
+          } else {
+            console.warn(`Invalid stock value "${newRow[stockColumnName]}" for item ${newRow.ItemName || newRow.ItemID}. Defaulting to 0.`);
+          }
+        } else {
+          console.warn(`'Stock' column not found for item ${newRow.ItemName || newRow.ItemID}. Defaulting InitialStock, ActualStock, QtyRemaining to 0.`);
+        }
+        
+        // Remove the original 'Stock' column if it exists, to avoid confusion
+        if (stockColumnName) {
+            delete newRow[stockColumnName];
+        }
+
+        newRow.InitialStock = stockValue;
+        newRow.ActualStock = stockValue;
+        newRow.QtyRemaining = stockValue;
+        
+        // Ensure ItemID is a number if it exists
+        if (newRow.ItemID !== undefined) {
+            newRow.ItemID = Number(newRow.ItemID);
+            if (isNaN(newRow.ItemID)) {
+                console.warn(`Invalid ItemID "${row.ItemID}" for item ${newRow.ItemName}. Setting to NaN.`);
+            }
+        }
+
+        return newRow;
+      });
+      inventory = processedInventory;
       saveInventory();
     } else if (type === "users") {
-      users = data;
+      // For users, ensure UserID is a number if it exists
+      const processedUsers = data.map(user => {
+        const newUser = { ...user };
+        if (newUser.UserID !== undefined) {
+          newUser.UserID = Number(newUser.UserID);
+          if (isNaN(newUser.UserID)) {
+             console.warn(`Invalid UserID "${user.UserID}" for user ${newUser.UserName}. Setting to NaN.`);
+          }
+        }
+        // Ensure Passcode is a number if it exists
+        if (newUser.Passcode !== undefined) {
+          newUser.Passcode = Number(newUser.Passcode);
+           if (isNaN(newUser.Passcode)) {
+             console.warn(`Invalid Passcode "${user.Passcode}" for user ${newUser.UserName}. Setting to NaN.`);
+          }
+        }
+        return newUser;
+      });
+      users = processedUsers;
       saveUsers();
     }
 
@@ -83,40 +145,83 @@ function getUsers() {
   return users;
 }
 
-function updateItemStock(itemID, quantityChange) {
-  // Ensure itemID is treated as a number if it comes from IPC or other sources as string
-  const numericItemID = Number(itemID);
-  const itemIndex = inventory.findIndex(item => item.ItemID === numericItemID);
+// Helper function - NOT EXPORTED
+function recalculateInventoryFieldsForItem(itemObject, fullActivityLog) {
+  if (!itemObject || itemObject.InitialStock === undefined) {
+    console.error("recalculateInventoryFieldsForItem: Invalid itemObject or InitialStock missing", itemObject);
+    // Potentially throw an error or handle as appropriate
+    return; 
+  }
+  const numericItemID = Number(itemObject.ItemID);
+  const relevantActivities = fullActivityLog.filter(entry => Number(entry.ItemID) === numericItemID);
+
+  let totalUsedOrLost = 0;
+  relevantActivities.forEach(entry => {
+    if (entry.Action === "Used" || entry.Action === "Lost") {
+      totalUsedOrLost += Math.abs(Number(entry.Qty) || 0); // Changed to entry.Qty
+    }
+  });
+
+  itemObject.ActualStock = Number(itemObject.InitialStock) - totalUsedOrLost;
+  if (itemObject.ActualStock < 0) {
+    itemObject.ActualStock = 0;
+  }
+
+  // Corrected QtyRemaining calculation
+  const totalBorrowed = relevantActivities
+    .filter(entry => entry.Action === "Borrowed")
+    .reduce((sum, entry) => sum + Math.abs(Number(entry.Qty || 0)), 0); // Changed to entry.Qty
+
+  const totalReturned = relevantActivities
+    .filter(entry => entry.Action === "Returned")
+    .reduce((sum, entry) => sum + Math.abs(Number(entry.Qty || 0)), 0); // Changed to entry.Qty
+
+  const netBorrowed = totalBorrowed - totalReturned;
+  itemObject.QtyRemaining = itemObject.ActualStock - netBorrowed;
+
+  // Apply caps
+  if (itemObject.QtyRemaining < 0) {
+    itemObject.QtyRemaining = 0;
+  }
+  if (itemObject.QtyRemaining > itemObject.ActualStock) {
+    itemObject.QtyRemaining = itemObject.ActualStock;
+  }
+}
+
+// EXPORTED function
+function updateInventoryAfterActivity(itemID, fullActivityLog) {
+  const numericItemID = Number(itemID); // Ensure numeric comparison
+  if (isNaN(numericItemID)) {
+    console.error(`updateInventoryAfterActivity: Invalid ItemID provided: ${itemID}`);
+    return { success: false, error: `Invalid ItemID: ${itemID}` };
+  }
+
+  const itemIndex = inventory.findIndex(invItem => Number(invItem.ItemID) === numericItemID);
 
   if (itemIndex !== -1) {
-    // Ensure Stock and quantityChange are numbers
-    const currentStock = Number(inventory[itemIndex].Stock);
-    const numericQuantityChange = Number(quantityChange);
-
-    if (isNaN(currentStock) || isNaN(numericQuantityChange)) {
-      console.error(`Error: Invalid stock or quantityChange for ItemID ${numericItemID}. Stock: ${inventory[itemIndex].Stock}, Change: ${quantityChange}`);
-      return { success: false, error: `Invalid stock or quantityChange for ItemID ${numericItemID}.` };
+    // Ensure InitialStock is a number before recalculating
+    if (inventory[itemIndex].InitialStock === undefined || isNaN(Number(inventory[itemIndex].InitialStock))) {
+        console.error(`Item ${numericItemID} has invalid or missing InitialStock: ${inventory[itemIndex].InitialStock}. Cannot recalculate.`);
+        inventory[itemIndex].InitialStock = 0; // Default to 0 if missing/invalid to prevent further errors.
+    } else {
+        inventory[itemIndex].InitialStock = Number(inventory[itemIndex].InitialStock);
     }
 
-    let newStock = currentStock + numericQuantityChange;
-
-    if (newStock < 0) {
-      console.warn(`Warning: ItemID ${numericItemID} stock tried to go negative (${newStock}). Setting to 0.`);
-      newStock = 0;
-    }
-    inventory[itemIndex].Stock = newStock;
-    saveInventory();
-    return { success: true, itemID: numericItemID, newStock: newStock };
+    recalculateInventoryFieldsForItem(inventory[itemIndex], fullActivityLog);
+    saveInventory(); // Persist changes
+    return { success: true, updatedItem: inventory[itemIndex] };
   } else {
+    console.warn(`updateInventoryAfterActivity: Item with ID ${numericItemID} not found.`);
     return { success: false, error: `Item with ID ${numericItemID} not found.` };
   }
 }
+
 
 module.exports = {
   loadExcelFile,
   getInventory,
   getUsers,
-  updateItemStock,
+  updateInventoryAfterActivity, // Added for export
   // Export save functions if they need to be called from elsewhere, though not strictly required by current instructions
   // saveInventory,
   // saveUsers

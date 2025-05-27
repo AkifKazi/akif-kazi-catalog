@@ -1,17 +1,18 @@
 const { app, BrowserWindow, Menu, dialog, ipcMain } = require("electron");
 const path = require("path");
 
-const { loadExcelFile, getInventory, getUsers, updateItemStock } = require("./backend/inventoryStore");
+// Updated imports
+const { loadExcelFile, getInventory, getUsers, updateInventoryAfterActivity } = require("./backend/inventoryStore");
 const {
-  addActivity,
+  addActivity, // For "Borrowed"
   getActivityLog,
-  exportActivityLog,
-  markItemUsedByActivityID,
-  markItemLostByActivityID,
-  markItemReturnedByActivityID
+  exportActivityLog, // Updated to filter itself
+  recordStaffReturn,
+  recordStaffUsed,
+  recordStaffLost
 } = require("./backend/activityStore");
 
-// Refactored function to handle activity log export
+// Refactored function to handle activity log export - This should still work
 async function handleExportActivityLog(browserWindow) {
   if (!browserWindow) {
     console.error("BrowserWindow instance is required to show save dialog.");
@@ -44,16 +45,96 @@ async function handleExportActivityLog(browserWindow) {
 
 
 // IPC Handlers
-ipcMain.handle("get-inventory", async () => getInventory());
+ipcMain.handle("get-inventory", async () => getInventory()); // Verified: Returns inventory with new fields
 ipcMain.handle("get-users", async () => getUsers());
-ipcMain.handle("update-item-stock", async (event, itemID, quantityChange) => updateItemStock(itemID, quantityChange));
+// Removed ipcMain.handle for "update-item-stock" as function was removed
+// Removed ipcMain.handle for "mark-item-used", "mark-item-lost", "mark-item-returned"
 
-ipcMain.handle("add-activity", async (event, entry) => addActivity(entry)); // Changed from .on to .handle
-ipcMain.handle("get-activity-log", async () => getActivityLog()); // Renamed from "get-activity"
-ipcMain.handle("mark-item-used", async (event, activityID) => markItemUsedByActivityID(activityID));
-ipcMain.handle("mark-item-lost", async (event, activityID) => markItemLostByActivityID(activityID));
-ipcMain.handle("mark-item-returned", async (event, activityID) => markItemReturnedByActivityID(activityID));
-ipcMain.handle("export-activity-log", async (event) => {
+ipcMain.handle("add-activity", async (event, entry) => {
+  // entry: { UserID, UserName, UserSpecs, Action: "Borrowed", ItemID, ItemName, ItemSpecs, Qty (positive), Timestamp, Notes }
+  try {
+    // Step 1: Update Inventory and Get QtyRemainingForItem.
+    // Note: getActivityLog() is called internally by updateInventoryAfterActivity if it needs the full log.
+    // However, the current design of updateInventoryAfterActivity in inventoryStore.js takes fullActivityLog as an argument.
+    const fullActivityLog = await getActivityLog(); // Fetch the full log once
+    const inventoryUpdateResult = await updateInventoryAfterActivity(entry.ItemID, fullActivityLog);
+
+    if (!inventoryUpdateResult || !inventoryUpdateResult.success || !inventoryUpdateResult.updatedItem) {
+      console.error("Failed to update inventory for add-activity:", inventoryUpdateResult.error);
+      return { success: false, error: `Failed to update inventory: ${inventoryUpdateResult.error || 'Unknown error'}` };
+    }
+
+    // Add QtyRemaining to the entry for logging purposes
+    entry.QtyRemaining = inventoryUpdateResult.updatedItem.QtyRemaining;
+    // Ensure Qty is positive (it should be from student.js, but double-check)
+    entry.Qty = Math.abs(Number(entry.Qty) || 0);
+
+
+    // Step 2: Add Activity to Log.
+    const activityAddResult = await addActivity(entry); // from activityStore.js
+    return activityAddResult; // Should be { success: true, newActivity: entry }
+
+  } catch (error) {
+    console.error("Error in add-activity handler:", error);
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle("get-activity-log", async () => getActivityLog());
+
+ipcMain.handle("record-staff-action", async (event, details) => {
+  // details: { originalBorrowActivityID, actionType, qtyToProcess, notes, staffUser, itemData }
+  try {
+    const activityDetails = {
+      UserID: details.staffUser.UserID,
+      UserName: details.staffUser.UserName,
+      UserSpecs: details.staffUser.UserSpecs,
+      ItemID: details.itemData.ItemID,
+      ItemName: details.itemData.ItemName,
+      ItemSpecs: details.itemData.ItemSpecs,
+      Qty: Math.abs(Number(details.qtyToProcess) || 0), // Ensure positive
+      originalBorrowActivityID: details.originalBorrowActivityID,
+      Notes: details.notes
+      // QtyRemainingForItem will be added next
+    };
+
+    // Step 2: Update Inventory and Get QtyRemainingForItem.
+    const fullActivityLog = await getActivityLog(); // Fetch the full log once
+    const inventoryUpdateResult = await updateInventoryAfterActivity(details.itemData.ItemID, fullActivityLog);
+    
+    if (!inventoryUpdateResult || !inventoryUpdateResult.success || !inventoryUpdateResult.updatedItem) {
+      console.error("Failed to update inventory for record-staff-action:", inventoryUpdateResult.error);
+      return { success: false, error: `Failed to update inventory: ${inventoryUpdateResult.error || 'Unknown error'}` };
+    }
+    
+    activityDetails.QtyRemainingForItem = inventoryUpdateResult.updatedItem.QtyRemaining;
+
+    // Step 3: Record the Staff Action.
+    let actionResult;
+    switch (details.actionType) {
+      case "Returned":
+        actionResult = await recordStaffReturn(activityDetails);
+        break;
+      case "Used":
+        actionResult = await recordStaffUsed(activityDetails);
+        break;
+      case "Lost":
+        actionResult = await recordStaffLost(activityDetails);
+        break;
+      default:
+        console.error("Invalid action type:", details.actionType);
+        return { success: false, error: "Invalid action type" };
+    }
+    return actionResult; // Should be { success: true, newActivity: entry }
+
+  } catch (error) {
+    console.error(`Error in record-staff-action handler (${details.actionType}):`, error);
+    return { success: false, error: error.message };
+  }
+});
+
+
+ipcMain.handle("export-activity-log", async (event) => { // Verified: exportActivityLog in activityStore now filters.
   const win = event.sender.getOwnerBrowserWindow();
   return handleExportActivityLog(win);
 });
