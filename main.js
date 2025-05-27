@@ -83,6 +83,7 @@ ipcMain.handle("add-activity", async (event, entry) => {
 ipcMain.handle("get-activity-log", async () => getActivityLog());
 
 ipcMain.handle("record-staff-action", async (event, details) => {
+  // console.log("IPC 'record-staff-action' received with details:", details);
   // details: { originalBorrowActivityID, actionType, qtyToProcess, notes, staffUser, itemData }
   try {
     const activityDetails = {
@@ -97,10 +98,12 @@ ipcMain.handle("record-staff-action", async (event, details) => {
       Notes: details.notes
       // QtyRemainingForItem will be added next
     };
+    // console.log("Prepared activityDetails (before inventory update):", activityDetails);
 
     // Step 2: Update Inventory and Get QtyRemainingForItem.
     const fullActivityLog = await getActivityLog(); // Fetch the full log once
     const inventoryUpdateResult = await updateInventoryAfterActivity(details.itemData.ItemID, fullActivityLog);
+    // console.log("Inventory update result:", inventoryUpdateResult);
     
     if (!inventoryUpdateResult || !inventoryUpdateResult.success || !inventoryUpdateResult.updatedItem) {
       console.error("Failed to update inventory for record-staff-action:", inventoryUpdateResult.error);
@@ -108,17 +111,21 @@ ipcMain.handle("record-staff-action", async (event, details) => {
     }
     
     activityDetails.QtyRemainingForItem = inventoryUpdateResult.updatedItem.QtyRemaining;
+    // console.log("activityDetails before calling specific record function:", activityDetails);
 
     // Step 3: Record the Staff Action.
     let actionResult;
     switch (details.actionType) {
       case "Returned":
+        // console.log("Calling 'recordStaffReturn' with:", activityDetails);
         actionResult = await recordStaffReturn(activityDetails);
         break;
       case "Used":
+        // console.log("Calling 'recordStaffUsed' with:", activityDetails);
         actionResult = await recordStaffUsed(activityDetails);
         break;
       case "Lost":
+        // console.log("Calling 'recordStaffLost' with:", activityDetails);
         actionResult = await recordStaffLost(activityDetails);
         break;
       default:

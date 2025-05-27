@@ -68,6 +68,8 @@ async function loadAndRenderActivityLog() {
         const borrowedQty = Number(entry.Qty) || 0;
         const currentProcessedQty = processedQtyMap[entry.activityID] || 0;
         const activeBorrowedQty = borrowedQty - currentProcessedQty;
+        // console.log(`For BorrowID ${entry.activityID} ('${entry.ItemName}'): borrowedQty=${borrowedQty}, currentProcessedQty=${currentProcessedQty}, activeBorrowedQty=${activeBorrowedQty}`);
+
 
         const statusDiv = document.createElement("p");
         statusDiv.innerHTML = `<em>Status: ${activeBorrowedQty > 0 ? `${activeBorrowedQty} of ${borrowedQty} pending action.` : `All ${borrowedQty} processed.`}</em>`;
@@ -79,20 +81,24 @@ async function loadAndRenderActivityLog() {
           buttonsContainer.className = "action-buttons";
           buttonsContainer.style.marginTop = "5px";
 
-          const itemData = { ItemID: entry.ItemID, ItemName: entry.ItemName, ItemSpecs: entry.ItemSpecs };
+          // const itemData = { ItemID: entry.ItemID, ItemName: entry.ItemName, ItemSpecs: entry.ItemSpecs }; // Original line
+          const itemData = { ItemID: entry.ItemID, ItemName: entry.ItemName, ItemSpecs: entry.ItemSpecs }; // Corrected: remove duplicate, ensure one definition
 
           const returnButton = document.createElement("button");
           returnButton.textContent = "Mark Returned";
-          returnButton.onclick = () => handleStaffAction(entry.activityID, itemData, activeBorrowedQty, "Returned");
+          // console.log("Attaching to Return button:", { borrowActivityID: entry.activityID, itemData, activeBorrowedQty, actionType: "Returned" });
+          returnButton.onclick = () => handleStaffAction(entry.activityID, itemData, activeBorrowedQty, "Returned"); 
           buttonsContainer.appendChild(returnButton);
 
           const usedButton = document.createElement("button");
           usedButton.textContent = "Mark Used";
+          // console.log("Attaching to Used button:", { borrowActivityID: entry.activityID, itemData, activeBorrowedQty, actionType: "Used" });
           usedButton.onclick = () => handleStaffAction(entry.activityID, itemData, activeBorrowedQty, "Used");
           buttonsContainer.appendChild(usedButton);
 
           const lostButton = document.createElement("button");
           lostButton.textContent = "Mark Lost";
+          // console.log("Attaching to Lost button:", { borrowActivityID: entry.activityID, itemData, activeBorrowedQty, actionType: "Lost" });
           lostButton.onclick = () => handleStaffAction(entry.activityID, itemData, activeBorrowedQty, "Lost");
           buttonsContainer.appendChild(lostButton);
           
@@ -114,10 +120,17 @@ async function loadAndRenderActivityLog() {
 }
 
 async function handleStaffAction(borrowActivityID, itemData, activeBorrowedQty, actionType) {
+  // console.log("handleStaffAction called with:", { borrowActivityID, itemData, activeBorrowedQty, actionType });
+
   const qtyToProcessStr = prompt(`Enter quantity of "${itemData.ItemName}" to mark as ${actionType} (max ${activeBorrowedQty}):`);
-  if (qtyToProcessStr === null) return; // User cancelled
+  // console.log("qtyToProcessStr from prompt:", qtyToProcessStr);
+  if (qtyToProcessStr === null) {
+    // console.log("User cancelled prompt.");
+    return; 
+  }
 
   const qtyToProcess = Number(qtyToProcessStr);
+  // console.log("Parsed qtyToProcess:", qtyToProcess);
   if (isNaN(qtyToProcess) || qtyToProcess <= 0) {
     alert("Invalid quantity. Please enter a positive number.");
     return;
@@ -127,9 +140,12 @@ async function handleStaffAction(borrowActivityID, itemData, activeBorrowedQty, 
     return;
   }
 
-  const notes = prompt("Enter any notes (optional):") || ""; // Allow empty notes
+  // Prompt for notes
+  const notesInput = prompt("Enter notes for this action (optional):");
+  const finalNotes = notesInput === null ? "" : notesInput;
 
   const staffUser = JSON.parse(localStorage.getItem("currentUser"));
+  // console.log("Retrieved staffUser:", staffUser);
   if (!staffUser) {
     alert("Staff user not found. Please log in again.");
     return;
@@ -139,13 +155,15 @@ async function handleStaffAction(borrowActivityID, itemData, activeBorrowedQty, 
     originalBorrowActivityID: borrowActivityID,
     actionType: actionType,
     qtyToProcess: qtyToProcess,
-    notes: notes,
-    staffUser: staffUser,
-    itemData: itemData
+    notes: finalNotes, // Use finalNotes here
+    staffUser: staffUser, // This is the full staff user object
+    itemData: itemData   // This is { ItemID, ItemName, ItemSpecs }
   };
+  // console.log("Details object for IPC:", details);
 
   try {
     const result = await window.electronAPI.recordStaffAction(details);
+    // console.log("Result from recordStaffAction IPC:", result);
     if (result && result.success) {
       alert(`Successfully recorded ${qtyToProcess} of ${itemData.ItemName} as ${actionType}.`);
       loadAndRenderActivityLog(); // Refresh the log
