@@ -50,41 +50,47 @@ ipcMain.handle("get-users", async () => getUsers());
 
 ipcMain.handle("add-activity", async (event, entry) => {
   try {
-    // It's still good practice to get a preliminary QtyRemaining for the log entry itself.
-    // This reflects the item's state just before this borrow attempt.
-    const preBorrowLog = await getActivityLog();
-    const preliminaryInventoryState = await updateInventoryAfterActivity(entry.ItemID, preBorrowLog);
+    // 1. Get current QtyRemaining for the item FOR LOGGING PURPOSES and stock check
+    const currentInventory = getInventory(); // from inventoryStore
+    const itemToLogFor = currentInventory.find(i => Number(i.ItemID) === Number(entry.ItemID));
     
-    if (!preliminaryInventoryState || !preliminaryInventoryState.success || !preliminaryInventoryState.updatedItem) {
-      return { success: false, error: `Failed to get preliminary inventory state: ${preliminaryInventoryState.error || 'Unknown error'}` };
+    // If item not found in inventory, it cannot be borrowed.
+    if (!itemToLogFor) {
+        return { success: false, error: `Item ID ${entry.ItemID} not found in inventory.` };
     }
-    entry.QtyRemaining = preliminaryInventoryState.updatedItem.QtyRemaining; // For this specific log line
-    entry.Qty = Math.abs(Number(entry.Qty) || 0);
+    // Check if enough quantity is available before logging the activity
+    const requestedQty = Number(entry.Qty) || 0;
+    if ((itemToLogFor.QtyRemaining || 0) < requestedQty) {
+        return { success: false, error: `Not enough stock for item ID ${entry.ItemID}. Available: ${itemToLogFor.QtyRemaining || 0}, Requested: ${requestedQty}` };
+    }
 
-    // 1. Add the new "Borrowed" activity to the log
+    entry.QtyRemaining = itemToLogFor.QtyRemaining; // Qty available before this borrow
+    entry.Qty = Math.abs(requestedQty);
+
+    // 2. Add the new "Borrowed" activity to the log
     const activityAddResult = await addActivity(entry);
     if (!activityAddResult || !activityAddResult.success) {
       return { success: false, error: `Failed to add borrow activity: ${activityAddResult.error || 'Unknown error'}` };
     }
 
-    // 2. Get the complete and updated activity log (now including the new borrow)
+    // 3. Get the complete and updated activity log
     const completeActivityLog = await getActivityLog();
 
-    // 3. Update the inventory's ActualStock and QtyRemaining based on the complete log
+    // 4. Update the inventory's ActualStock and QtyRemaining based on the complete log
     const finalInventoryUpdateResult = await updateInventoryAfterActivity(entry.ItemID, completeActivityLog);
 
     if (!finalInventoryUpdateResult || !finalInventoryUpdateResult.success || !finalInventoryUpdateResult.updatedItem) {
-      // This is a more critical failure, as inventory might be inconsistent.
-      // Consider if any rollback or error logging is needed for activityAddResult.
-      return { success: false, error: `Failed to finalize inventory update: ${finalInventoryUpdateResult.error || 'Unknown error'}` };
+      // This is a critical failure. Consider if the activity log entry should be rolled back.
+      // For now, returning an error is the primary action.
+      console.error("CRITICAL: Activity logged but inventory update failed for item:", entry.ItemID);
+      return { success: false, error: `Activity logged but inventory update failed: ${finalInventoryUpdateResult.error || 'Unknown error'}` };
     }
 
-    // Return success, potentially with the latest item state
     return { 
       success: true, 
       message: "Borrowing successful and inventory updated.",
-      updatedItem: finalInventoryUpdateResult.updatedItem, // Send the truly latest item state
-      activity: activityAddResult.newActivity // Send the logged activity
+      updatedItem: finalInventoryUpdateResult.updatedItem,
+      activity: activityAddResult.newActivity
     };
 
   } catch (error) {
@@ -173,7 +179,8 @@ ipcMain.handle("record-staff-action", async (event, details) => {
       return { 
         success: true, 
         message: "Staff action processed.", 
-        qtyRemaining: finalQtyRemainingForItem 
+        qtyRemaining: finalQtyRemainingForItem,
+        activityLog: currentActivityLog // Add this line
       };
     } else {
       return { success: false, error: errors.join("; ") };

@@ -10,7 +10,7 @@ document.addEventListener('DOMContentLoaded', () => {
     loadAndRenderActivityLog();
 });
 
-async function loadAndRenderActivityLog() {
+async function loadAndRenderActivityLog(logEntriesToShow) {
   const logContainer = document.getElementById("activity-log");
   if (!logContainer) {
     console.error("Activity log container not found!");
@@ -18,8 +18,16 @@ async function loadAndRenderActivityLog() {
   }
   logContainer.innerHTML = "Loading activities...";
 
+  let allLogEntries;
+  if (logEntriesToShow) {
+    allLogEntries = logEntriesToShow;
+    // console.log("Using provided log for render");
+  } else {
+    // console.log("Fetching new log for render");
+    allLogEntries = await window.electronAPI.getActivityLog();
+  }
+
   try {
-    const allLogEntries = await window.electronAPI.getActivityLog();
     logContainer.innerHTML = ""; // Clear before rendering
 
     if (!allLogEntries || allLogEntries.length === 0) {
@@ -157,17 +165,24 @@ async function handleStaffAction(borrowActivityID, itemData, activeBorrowedQty, 
 
   try {
     const result = await window.electronAPI.recordStaffAction(details);
-    if (result && result.success) {
+    if (result && result.success && result.activityLog) {
       window.electronAPI.showNotification("Success", `${qtyToProcess}/${originalBorrowedQty} Returned`);
-      // Clear the notes field after successful action (optional, as loadAndRenderActivityLog rebuilds UI)
+      
       if (notesInputElement) {
           notesInputElement.value = ""; 
       }
-      // Also clear the qty received input
+      // qtyReceivedElement is already defined in the outer scope of this function
       if (qtyReceivedElement) {
-        qtyReceivedElement.value = ""; // Or a sensible default like 0 or activeBorrowedQty post-action
+          qtyReceivedElement.value = ""; // Clear the input
       }
-      loadAndRenderActivityLog(); // Refresh the log
+      
+      loadAndRenderActivityLog(result.activityLog); // Pass the fresh log
+    } else if (result && result.success) {
+        // Fallback if activityLog is somehow missing from a successful response
+        window.electronAPI.showNotification("Success", `${qtyToProcess}/${originalBorrowedQty} Returned (UI will refresh)`);
+        if (notesInputElement) { notesInputElement.value = ""; }
+        if (qtyReceivedElement) { qtyReceivedElement.value = ""; }
+        loadAndRenderActivityLog(); // Call without log, will fetch
     } else {
       window.electronAPI.showNotification("Error", `Failed to record action: ${result ? result.error : 'Unknown error'}`);
     }

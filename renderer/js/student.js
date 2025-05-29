@@ -116,7 +116,7 @@ function renderCart() {
     div.innerHTML = `
       ${cartItem.ItemName} (${cartItem.ItemSpecs}) 
       <button onclick="updateQty(${idx}, -1)">-</button>
-      <input value="${cartItem.quantity}" onchange="manualQty(${idx}, this.value)" style="width: 40px;" />
+      <input type="number" min="1" max="${cartItem.QtyRemaining}" value="${cartItem.quantity}" onchange="manualQty(${idx}, this.value)" style="width: 50px;" />
       <button onclick="updateQty(${idx}, 1)" ${cartItem.quantity >= cartItem.QtyRemaining ? "disabled" : ""}>+</button>
       <button onclick="removeItem(${idx})">x</button>
     `;

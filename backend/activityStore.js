@@ -134,23 +134,7 @@ function exportActivityLog(filepath) {
       // Notes will be aggregated below
     };
 
-    let allNotes = [];
-    if (returnEntry.Notes) {
-      allNotes.push(returnEntry.Notes);
-    }
-
-    // Aggregate Notes from related "Lost" actions
-    const relatedLostActions = activityLog.filter(lostEntry => 
-        lostEntry.Action === "Lost" && 
-        lostEntry.originalBorrowActivityID === returnEntry.originalBorrowActivityID
-    );
-    
-    relatedLostActions.forEach(lost => {
-        if (lost.Notes) { 
-             allNotes.push(lost.Notes);
-        }
-    });
-    row["Notes"] = allNotes.filter(n => n).join("; "); // Join non-empty notes
+    row["Notes"] = returnEntry.Notes || ""; // Use only the note from the "Returned" action.
 
     exportData.push(row);
   });
