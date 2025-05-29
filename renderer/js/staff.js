@@ -108,7 +108,8 @@ async function loadAndRenderActivityLog(logEntriesToShow) {
           const confirmButton = document.createElement("button");
           confirmButton.textContent = "Confirm";
           confirmButton.onclick = () => {
-              handleStaffAction(entry.activityID, JSON.parse(JSON.stringify(itemData)), activeBorrowedQty, borrowedQty); 
+              confirmButton.disabled = true;
+              handleStaffAction(entry.activityID, JSON.parse(JSON.stringify(itemData)), activeBorrowedQty, borrowedQty, entryDiv, confirmButton); 
           };
           buttonsContainer.appendChild(confirmButton);
           
@@ -129,7 +130,7 @@ async function loadAndRenderActivityLog(logEntriesToShow) {
   }
 }
 
-async function handleStaffAction(borrowActivityID, itemData, activeBorrowedQty, originalBorrowedQty) {
+async function handleStaffAction(borrowActivityID, itemData, activeBorrowedQty, originalBorrowedQty, entryDiv, confirmButton) {
   // Get "Quantity Received"
   const qtyReceivedElement = document.getElementById(`qty-received-${borrowActivityID}`);
   const qtyToProcess = Number(qtyReceivedElement.value);
@@ -140,18 +141,31 @@ async function handleStaffAction(borrowActivityID, itemData, activeBorrowedQty, 
 
   if (isNaN(qtyToProcess) || qtyToProcess <= 0) {
     window.electronAPI.showNotification("Validation Error", "Invalid quantity. Please enter a positive number.");
+    if (confirmButton) confirmButton.disabled = false; // Re-enable button
     return;
   }
   if (qtyToProcess > activeBorrowedQty) {
     window.electronAPI.showNotification("Validation Error", `Quantity cannot exceed available active borrowed quantity (${activeBorrowedQty}).`);
+    if (confirmButton) confirmButton.disabled = false; // Re-enable button
     return;
   }
 
   const staffUser = JSON.parse(localStorage.getItem("currentUser"));
   if (!staffUser) {
     window.electronAPI.showNotification("Error", "Staff user not found. Please log in again.");
+    if (confirmButton) confirmButton.disabled = false; // Re-enable button
     return;
   }
+
+  // Visual feedback for processing
+  // Disable inputs during processing
+  if (qtyReceivedElement) qtyReceivedElement.disabled = true;
+  if (notesInputElement) notesInputElement.disabled = true;
+  entryDiv.style.backgroundColor = 'lightgray';
+  const processingMsg = document.createElement('span');
+  processingMsg.textContent = " (Processing...)";
+  processingMsg.style.fontStyle = "italic";
+  entryDiv.appendChild(processingMsg);
   
   const details = {
     originalBorrowActivityID: borrowActivityID,
@@ -185,9 +199,25 @@ async function handleStaffAction(borrowActivityID, itemData, activeBorrowedQty, 
         loadAndRenderActivityLog(); // Call without log, will fetch
     } else {
       window.electronAPI.showNotification("Error", `Failed to record action: ${result ? result.error : 'Unknown error'}`);
+      // Clear processing message and re-enable button on error
+      if (processingMsg && processingMsg.parentNode === entryDiv) {
+        entryDiv.removeChild(processingMsg);
+      }
+      entryDiv.style.backgroundColor = ''; // Reset background
+      if (confirmButton) confirmButton.disabled = false;
+      if (qtyReceivedElement) qtyReceivedElement.disabled = false;
+      if (notesInputElement) notesInputElement.disabled = false;
     }
   } catch (error) {
     console.error(`Error in handleStaffAction (Returned):`, error); // Updated error log
     window.electronAPI.showNotification("Error", `An unexpected error occurred: ${error.message}`);
+    // Clear processing message and re-enable button on error
+    if (processingMsg && processingMsg.parentNode === entryDiv) {
+      entryDiv.removeChild(processingMsg);
+    }
+    entryDiv.style.backgroundColor = ''; // Reset background
+    if (confirmButton) confirmButton.disabled = false;
+    if (qtyReceivedElement) qtyReceivedElement.disabled = false;
+    if (notesInputElement) notesInputElement.disabled = false;
   }
 }
