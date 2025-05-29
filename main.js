@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, dialog, ipcMain } = require("electron");
+const { app, BrowserWindow, Menu, dialog, ipcMain, Notification } = require("electron");
 const path = require("path");
 
 // Updated imports
@@ -50,19 +50,42 @@ ipcMain.handle("get-users", async () => getUsers());
 
 ipcMain.handle("add-activity", async (event, entry) => {
   try {
-    const fullActivityLog = await getActivityLog(); 
-    const inventoryUpdateResult = await updateInventoryAfterActivity(entry.ItemID, fullActivityLog);
-
-    if (!inventoryUpdateResult || !inventoryUpdateResult.success || !inventoryUpdateResult.updatedItem) {
-      console.error("Failed to update inventory for add-activity:", inventoryUpdateResult.error);
-      return { success: false, error: `Failed to update inventory: ${inventoryUpdateResult.error || 'Unknown error'}` };
+    // It's still good practice to get a preliminary QtyRemaining for the log entry itself.
+    // This reflects the item's state just before this borrow attempt.
+    const preBorrowLog = await getActivityLog();
+    const preliminaryInventoryState = await updateInventoryAfterActivity(entry.ItemID, preBorrowLog);
+    
+    if (!preliminaryInventoryState || !preliminaryInventoryState.success || !preliminaryInventoryState.updatedItem) {
+      return { success: false, error: `Failed to get preliminary inventory state: ${preliminaryInventoryState.error || 'Unknown error'}` };
     }
-
-    entry.QtyRemaining = inventoryUpdateResult.updatedItem.QtyRemaining;
+    entry.QtyRemaining = preliminaryInventoryState.updatedItem.QtyRemaining; // For this specific log line
     entry.Qty = Math.abs(Number(entry.Qty) || 0);
 
-    const activityAddResult = await addActivity(entry); 
-    return activityAddResult; 
+    // 1. Add the new "Borrowed" activity to the log
+    const activityAddResult = await addActivity(entry);
+    if (!activityAddResult || !activityAddResult.success) {
+      return { success: false, error: `Failed to add borrow activity: ${activityAddResult.error || 'Unknown error'}` };
+    }
+
+    // 2. Get the complete and updated activity log (now including the new borrow)
+    const completeActivityLog = await getActivityLog();
+
+    // 3. Update the inventory's ActualStock and QtyRemaining based on the complete log
+    const finalInventoryUpdateResult = await updateInventoryAfterActivity(entry.ItemID, completeActivityLog);
+
+    if (!finalInventoryUpdateResult || !finalInventoryUpdateResult.success || !finalInventoryUpdateResult.updatedItem) {
+      // This is a more critical failure, as inventory might be inconsistent.
+      // Consider if any rollback or error logging is needed for activityAddResult.
+      return { success: false, error: `Failed to finalize inventory update: ${finalInventoryUpdateResult.error || 'Unknown error'}` };
+    }
+
+    // Return success, potentially with the latest item state
+    return { 
+      success: true, 
+      message: "Borrowing successful and inventory updated.",
+      updatedItem: finalInventoryUpdateResult.updatedItem, // Send the truly latest item state
+      activity: activityAddResult.newActivity // Send the logged activity
+    };
 
   } catch (error) {
     console.error("Error in add-activity handler:", error);
@@ -74,57 +97,113 @@ ipcMain.handle("get-activity-log", async () => getActivityLog());
 
 ipcMain.handle("record-staff-action", async (event, details) => {
   try {
-    const activityDetails = {
-      UserID: details.staffUser.UserID,
-      UserName: details.staffUser.UserName,
-      UserSpecs: details.staffUser.UserSpecs,
-      ItemID: details.itemData.ItemID,
-      ItemName: details.itemData.ItemName,
-      ItemSpecs: details.itemData.ItemSpecs,
-      Qty: Math.abs(Number(details.qtyToProcess) || 0), 
-      originalBorrowActivityID: details.originalBorrowActivityID,
-      Notes: details.notes
-    };
+    const qtyConfirmedReceived = Math.abs(Number(details.qtyToProcess) || 0);
+    // Ensure originalBorrowedQty is a number and defaults reasonably if not provided.
+    const originalBorrowedQty = Math.abs(Number(details.originalBorrowedQty) || (qtyConfirmedReceived)); 
 
-    const fullActivityLog = await getActivityLog(); 
-    const inventoryUpdateResult = await updateInventoryAfterActivity(details.itemData.ItemID, fullActivityLog);
-    
-    if (!inventoryUpdateResult || !inventoryUpdateResult.success || !inventoryUpdateResult.updatedItem) {
-      console.error("Failed to update inventory for record-staff-action:", inventoryUpdateResult.error);
-      return { success: false, error: `Failed to update inventory: ${inventoryUpdateResult.error || 'Unknown error'}` };
+    let overallSuccess = true;
+    let errors = [];
+    let finalQtyRemainingForItem;
+
+    // 1. Record "Returned" action if applicable
+    if (qtyConfirmedReceived > 0) {
+      const returnedActivityDetails = {
+        UserID: details.staffUser.UserID,
+        UserName: details.staffUser.UserName,
+        UserSpecs: details.staffUser.UserSpecs,
+        ItemID: details.itemData.ItemID,
+        ItemName: details.itemData.ItemName,
+        ItemSpecs: details.itemData.ItemSpecs,
+        Qty: qtyConfirmedReceived,
+        originalBorrowActivityID: details.originalBorrowActivityID,
+        Notes: details.notes // User's note applies to the returned part
+      };
+      // QtyRemainingForItem will be set after all processing by updateInventoryAfterActivity
+      const returnResult = await recordStaffReturn(returnedActivityDetails);
+      if (!returnResult.success) {
+        overallSuccess = false;
+        errors.push(returnResult.error || "Failed to record return action.");
+      }
     }
-    
-    activityDetails.QtyRemainingForItem = inventoryUpdateResult.updatedItem.QtyRemaining;
-    
-    let actionResult;
-    switch (details.actionType) {
-      case "Returned":
-        actionResult = await recordStaffReturn(activityDetails);
-        break;
-      case "Used":
-        actionResult = await recordStaffUsed(activityDetails);
-        break;
-      case "Lost":
-        actionResult = await recordStaffLost(activityDetails);
-        break;
-      default:
-        console.error("Invalid action type:", details.actionType);
-        return { success: false, error: "Invalid action type" };
+
+    // 2. Record "Lost" action for the difference
+    const qtyImplicitlyLost = originalBorrowedQty - qtyConfirmedReceived;
+    if (qtyImplicitlyLost > 0) {
+      const lostActivityDetails = {
+        UserID: details.staffUser.UserID, // Same user context
+        UserName: details.staffUser.UserName,
+        UserSpecs: details.staffUser.UserSpecs,
+        ItemID: details.itemData.ItemID, // Same item
+        ItemName: details.itemData.ItemName,
+        ItemSpecs: details.itemData.ItemSpecs,
+        Qty: qtyImplicitlyLost,
+        originalBorrowActivityID: details.originalBorrowActivityID, // Link to the same borrow
+        Notes: `Implicitly recorded as lost. Original note: ${details.notes || ""}` // System note
+      };
+      // QtyRemainingForItem will be set after all processing by updateInventoryAfterActivity
+      const lostResult = await recordStaffLost(lostActivityDetails);
+      if (!lostResult.success) {
+        overallSuccess = false;
+        errors.push(lostResult.error || "Failed to record implicit lost action.");
+      }
     }
-    return actionResult; 
+
+    // 3. Update inventory based on ALL activities (including new ones)
+    // It's crucial that getActivityLog() inside updateInventoryAfterActivity or if called before it,
+    // fetches the most up-to-date log including the records just added.
+    // Assuming activityStore functions (recordStaffReturn, recordStaffLost) correctly update the underlying store
+    // before updateInventoryAfterActivity fetches from it.
+    
+    const currentActivityLog = await getActivityLog(); // Get the freshest log
+    const inventoryUpdateResult = await updateInventoryAfterActivity(details.itemData.ItemID, currentActivityLog);
+
+    if (!inventoryUpdateResult || !inventoryUpdateResult.success) {
+      overallSuccess = false;
+      errors.push(inventoryUpdateResult.error || "Failed to update inventory after actions.");
+      // If inventory update fails, QtyRemainingForItem might be stale or undefined
+      finalQtyRemainingForItem = 'Error updating inventory'; 
+    } else {
+      finalQtyRemainingForItem = inventoryUpdateResult.updatedItem.QtyRemaining;
+    }
+
+    if (overallSuccess) {
+      // The success response should indicate the final state.
+      // The individual results of recordStaffReturn/Lost are important for logging,
+      // but the main success is that the process completed and inventory is updated.
+      return { 
+        success: true, 
+        message: "Staff action processed.", 
+        qtyRemaining: finalQtyRemainingForItem 
+      };
+    } else {
+      return { success: false, error: errors.join("; ") };
+    }
 
   } catch (error) {
-    console.error(`Error in record-staff-action handler (${details.actionType}):`, error);
+    console.error(`Error in record-staff-action handler:`, error);
     return { success: false, error: error.message };
   }
 });
-
 
 ipcMain.handle("export-activity-log", async (event) => { 
   const win = event.sender.getOwnerBrowserWindow();
   return handleExportActivityLog(win);
 });
 
+ipcMain.on("show-notification", (event, title, body) => {
+  if (Notification.isSupported()) { // Check if platform supports notifications
+    const notification = new Notification({
+      title: title,
+      body: body,
+      // You can add other options like 'icon' if you have one
+    });
+    notification.show();
+  } else {
+    console.log("Notifications not supported on this platform. Title:", title, "Body:", body);
+    // As a fallback, you could dialog.showMessageBox, but for now, console log is fine.
+    // dialog.showMessageBox(BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0], { type: 'info', title: title, message: body });
+  }
+});
 
 function createWindow() {
   const win = new BrowserWindow({

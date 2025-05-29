@@ -113,20 +113,53 @@ function getActivityLog() {
 }
 
 function exportActivityLog(filepath) {
-  // Filter for "Returned", "Used", "Lost" actions
-  const filteredLog = activityLog.filter(entry => 
-    ["Returned", "Used", "Lost"].includes(entry.Action)
-  );
+  const returnedActivities = activityLog.filter(entry => entry.Action === "Returned");
+  const exportData = [];
 
-  // Ensure Qty is positive and correctly named for export if it wasn't already
-  const exportData = filteredLog.map(entry => ({
-    ...entry,
-    Qty: Math.abs(Number(entry.Qty) || 0) // Ensure Qty is positive for export
-  }));
+  returnedActivities.forEach(returnEntry => {
+    const originalBorrowEntry = activityLog.find(
+      bEntry => bEntry.activityID === returnEntry.originalBorrowActivityID && bEntry.Action === "Borrowed"
+    );
 
-  const worksheet = XLSX.utils.json_to_sheet(exportData);
+    let row = {
+      "Student ID": originalBorrowEntry ? originalBorrowEntry.UserID : null,
+      "Name": originalBorrowEntry ? originalBorrowEntry.UserName : null,
+      "Batch": originalBorrowEntry ? originalBorrowEntry.UserSpecs : null,
+      "Returned": Math.abs(Number(returnEntry.Qty) || 0), // Ensure positive
+      "Borrowed": originalBorrowEntry ? Math.abs(Number(originalBorrowEntry.Qty) || 0) : null, // Ensure positive
+      "Item": originalBorrowEntry ? originalBorrowEntry.ItemName : null,
+      "Details": originalBorrowEntry ? originalBorrowEntry.ItemSpecs : null,
+      "Borrow Timestamp": originalBorrowEntry ? originalBorrowEntry.Timestamp : null,
+      "Return Timestamp": returnEntry.Timestamp,
+      // Notes will be aggregated below
+    };
+
+    let allNotes = [];
+    if (returnEntry.Notes) {
+      allNotes.push(returnEntry.Notes);
+    }
+
+    // Aggregate Notes from related "Lost" actions
+    const relatedLostActions = activityLog.filter(lostEntry => 
+        lostEntry.Action === "Lost" && 
+        lostEntry.originalBorrowActivityID === returnEntry.originalBorrowActivityID
+    );
+    
+    relatedLostActions.forEach(lost => {
+        if (lost.Notes) { 
+             allNotes.push(lost.Notes);
+        }
+    });
+    row["Notes"] = allNotes.filter(n => n).join("; "); // Join non-empty notes
+
+    exportData.push(row);
+  });
+
+  const worksheet = XLSX.utils.json_to_sheet(exportData, { 
+    header: ["Student ID", "Name", "Batch", "Returned", "Borrowed", "Item", "Details", "Borrow Timestamp", "Return Timestamp", "Notes"] 
+  });
   const workbook = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(workbook, worksheet, "StaffActions"); // Changed sheet name
+  XLSX.utils.book_append_sheet(workbook, worksheet, "Activity Log");
   XLSX.writeFile(workbook, filepath);
 }
 

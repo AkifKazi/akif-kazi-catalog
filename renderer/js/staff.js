@@ -71,40 +71,38 @@ async function loadAndRenderActivityLog() {
 
         if (activeBorrowedQty > 0) {
           entryDiv.style.borderColor = "orange"; 
+
+          // New display structure
+          const newControlsDiv = document.createElement("div");
+          newControlsDiv.innerHTML = `
+            <p><strong>User:</strong> ${entry.UserName} (${entry.UserSpecs})</p>
+            <p><strong>Item:</strong> ${entry.ItemName} (${entry.ItemSpecs})</p>
+            <p><strong>Quantity Borrowed:</strong> ${entry.Qty}</p>
+            <div class="form-group">
+                <label for="qty-received-${entry.activityID}">Quantity Received:</label>
+                <input type="number" id="qty-received-${entry.activityID}" value="${activeBorrowedQty}" style="width: 60px; margin-right: 10px;">
+            </div>
+            <div class="form-group">
+                <label for="notes-${entry.activityID}">Short Note:</label>
+                <input type="text" id="notes-${entry.activityID}" placeholder="Optional notes..." style="margin-right: 10px;">
+            </div>
+            <p><strong>Timestamp:</strong> ${entry.Timestamp}</p>
+          `;
+          entryDiv.appendChild(newControlsDiv);
+
           const buttonsContainer = document.createElement("div");
           buttonsContainer.className = "action-buttons";
           buttonsContainer.style.marginTop = "5px";
 
           const itemData = { ItemID: entry.ItemID, ItemName: entry.ItemName, ItemSpecs: entry.ItemSpecs };
 
-          // Create Notes Input Field
-          const notesInput = document.createElement("input");
-          notesInput.setAttribute("type", "text");
-          notesInput.setAttribute("id", `notes-${entry.activityID}`);
-          notesInput.setAttribute("placeholder", "Optional notes...");
-          notesInput.style.marginRight = "10px"; // Add some spacing
-          buttonsContainer.appendChild(notesInput); // Add notes input before buttons
-
-          const returnButton = document.createElement("button");
-          returnButton.textContent = "Mark Returned";
-          returnButton.onclick = () => {
-              handleStaffAction(entry.activityID, JSON.parse(JSON.stringify(itemData)), activeBorrowedQty, "Returned");
+          // "Confirm" button (renamed from "Mark Returned")
+          const confirmButton = document.createElement("button");
+          confirmButton.textContent = "Confirm";
+          confirmButton.onclick = () => {
+              handleStaffAction(entry.activityID, JSON.parse(JSON.stringify(itemData)), activeBorrowedQty, borrowedQty); 
           };
-          buttonsContainer.appendChild(returnButton);
-
-          const usedButton = document.createElement("button");
-          usedButton.textContent = "Mark Used";
-          usedButton.onclick = () => {
-              handleStaffAction(entry.activityID, JSON.parse(JSON.stringify(itemData)), activeBorrowedQty, "Used");
-          };
-          buttonsContainer.appendChild(usedButton);
-
-          const lostButton = document.createElement("button");
-          lostButton.textContent = "Mark Lost";
-          lostButton.onclick = () => {
-              handleStaffAction(entry.activityID, JSON.parse(JSON.stringify(itemData)), activeBorrowedQty, "Lost");
-          };
-          buttonsContainer.appendChild(lostButton);
+          buttonsContainer.appendChild(confirmButton);
           
           entryDiv.appendChild(buttonsContainer);
         } else {
@@ -123,55 +121,58 @@ async function loadAndRenderActivityLog() {
   }
 }
 
-async function handleStaffAction(borrowActivityID, itemData, activeBorrowedQty, actionType) {
-  const qtyToProcessStr = prompt(`Enter quantity of "${itemData.ItemName}" to mark as ${actionType} (max ${activeBorrowedQty}):`);
-  if (qtyToProcessStr === null) {
-    return; 
-  }
-  const qtyToProcess = Number(qtyToProcessStr);
+async function handleStaffAction(borrowActivityID, itemData, activeBorrowedQty, originalBorrowedQty) {
+  // Get "Quantity Received"
+  const qtyReceivedElement = document.getElementById(`qty-received-${borrowActivityID}`);
+  const qtyToProcess = Number(qtyReceivedElement.value);
   
   // Retrieve notes from the text input field
   const notesInputElement = document.getElementById(`notes-${borrowActivityID}`);
   const finalNotes = notesInputElement ? notesInputElement.value.trim() : "";
 
   if (isNaN(qtyToProcess) || qtyToProcess <= 0) {
-    alert("Invalid quantity. Please enter a positive number.");
+    window.electronAPI.showNotification("Validation Error", "Invalid quantity. Please enter a positive number.");
     return;
   }
   if (qtyToProcess > activeBorrowedQty) {
-    alert(`Quantity cannot exceed available active borrowed quantity (${activeBorrowedQty}).`);
+    window.electronAPI.showNotification("Validation Error", `Quantity cannot exceed available active borrowed quantity (${activeBorrowedQty}).`);
     return;
   }
 
   const staffUser = JSON.parse(localStorage.getItem("currentUser"));
   if (!staffUser) {
-    alert("Staff user not found. Please log in again.");
+    window.electronAPI.showNotification("Error", "Staff user not found. Please log in again.");
     return;
   }
   
   const details = {
     originalBorrowActivityID: borrowActivityID,
-    actionType: actionType,
+    actionType: "Returned", // Hardcoded as "Returned"
     qtyToProcess: qtyToProcess,
     notes: finalNotes, 
     staffUser: staffUser, 
-    itemData: itemData   
+    itemData: itemData,
+    originalBorrowedQty: originalBorrowedQty // Add this new field
   };
 
   try {
     const result = await window.electronAPI.recordStaffAction(details);
     if (result && result.success) {
-      alert(`Successfully recorded ${qtyToProcess} of ${itemData.ItemName} as ${actionType}.`);
+      window.electronAPI.showNotification("Success", `${qtyToProcess}/${originalBorrowedQty} Returned`);
       // Clear the notes field after successful action (optional, as loadAndRenderActivityLog rebuilds UI)
       if (notesInputElement) {
           notesInputElement.value = ""; 
       }
+      // Also clear the qty received input
+      if (qtyReceivedElement) {
+        qtyReceivedElement.value = ""; // Or a sensible default like 0 or activeBorrowedQty post-action
+      }
       loadAndRenderActivityLog(); // Refresh the log
     } else {
-      alert(`Failed to record action: ${result ? result.error : 'Unknown error'}`);
+      window.electronAPI.showNotification("Error", `Failed to record action: ${result ? result.error : 'Unknown error'}`);
     }
   } catch (error) {
-    console.error(`Error in handleStaffAction (${actionType}):`, error);
-    alert(`An unexpected error occurred: ${error.message}`);
+    console.error(`Error in handleStaffAction (Returned):`, error); // Updated error log
+    window.electronAPI.showNotification("Error", `An unexpected error occurred: ${error.message}`);
   }
 }
