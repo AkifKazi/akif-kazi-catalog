@@ -1,0 +1,40 @@
+# Dependencies
+/node_modules
+
+# User Data (JSON files created by the app)
+*.json
+
+# Build files
+/dist
+/out
+
+# Electron files
+.DS_Store
+*.pem
+*.p12
+*.pfx
+*.crl
+*.key
+*.csr
+*.srl
+*.app
+*.exe
+*.msi
+*.pkg
+*.dmg
+*.deb
+*.rpm
+*.snap
+*.AppImage
+*.zip
+*.tar.gz
+*.tgz
+*.bz2
+*.7z
+
+# Log files
+*.log
+logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
