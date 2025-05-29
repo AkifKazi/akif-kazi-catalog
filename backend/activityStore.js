@@ -113,20 +113,50 @@ function getActivityLog() {
 }
 
 function exportActivityLog(filepath) {
-  // Filter for "Returned", "Used", "Lost" actions
-  const filteredLog = activityLog.filter(entry => 
-    ["Returned", "Used", "Lost"].includes(entry.Action)
-  );
+  const borrowActivities = activityLog.filter(entry => entry.Action === "Borrowed");
+  const exportData = [];
 
-  // Ensure Qty is positive and correctly named for export if it wasn't already
-  const exportData = filteredLog.map(entry => ({
-    ...entry,
-    Qty: Math.abs(Number(entry.Qty) || 0) // Ensure Qty is positive for export
-  }));
+  borrowActivities.forEach(borrowEntry => {
+    let row = {
+      "Student ID": borrowEntry.UserID,
+      "Name": borrowEntry.UserName,
+      "Batch": borrowEntry.UserSpecs,
+      "Borrowed": Math.abs(Number(borrowEntry.Qty) || 0), // Ensure positive
+      "Item": borrowEntry.ItemName,
+      "Details": borrowEntry.ItemSpecs,
+      "Timestamp": borrowEntry.Timestamp, // Timestamp of borrow
+      "Returned": 0,
+      "Notes": ""
+    };
 
-  const worksheet = XLSX.utils.json_to_sheet(exportData);
+    const relatedActions = activityLog.filter(relEntry => relEntry.originalBorrowActivityID === borrowEntry.activityID);
+    
+    let totalReturned = 0;
+    let notesArray = [];
+
+    relatedActions.forEach(relEntry => {
+      if (relEntry.Action === "Returned") {
+        totalReturned += Math.abs(Number(relEntry.Qty) || 0); // Ensure positive
+        if (relEntry.Notes) {
+          notesArray.push(relEntry.Notes);
+        }
+      } else if (relEntry.Action === "Lost") {
+        if (relEntry.Notes) { // Always include notes from Lost actions if they exist
+            notesArray.push(relEntry.Notes);
+        }
+      }
+    });
+
+    row["Returned"] = totalReturned;
+    row["Notes"] = notesArray.join("; "); 
+    exportData.push(row);
+  });
+
+  const worksheet = XLSX.utils.json_to_sheet(exportData, { 
+    header: ["Student ID", "Name", "Batch", "Returned", "Borrowed", "Item", "Details", "Timestamp", "Notes"] 
+  });
   const workbook = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(workbook, worksheet, "StaffActions"); // Changed sheet name
+  XLSX.utils.book_append_sheet(workbook, worksheet, "Activity Log"); // New sheet name
   XLSX.writeFile(workbook, filepath);
 }
 
