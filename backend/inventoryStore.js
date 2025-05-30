@@ -93,8 +93,8 @@ function loadExcelFile(filePath, type = "inventory") {
         }
 
         newRow.InitialStock = stockValue;
-        newRow.ActualStock = stockValue;
-        newRow.QtyRemaining = stockValue;
+        // newRow.ActualStock = stockValue; // ActualStock removed as per requirement
+        newRow.QtyRemaining = stockValue; // QtyRemaining initialized to InitialStock (stockValue)
         
         // Ensure ItemID is a number if it exists
         if (newRow.ItemID !== undefined) {
@@ -147,45 +147,48 @@ function getUsers() {
 
 // Helper function - NOT EXPORTED
 function recalculateInventoryFieldsForItem(itemObject, fullActivityLog) {
+  console.log(`[inventoryStore] recalculateInventoryFieldsForItem for ItemID: ${itemObject.ItemID}, Initial Data: ${JSON.stringify(itemObject)}`);
+
   if (!itemObject || itemObject.InitialStock === undefined) {
-    console.error("recalculateInventoryFieldsForItem: Invalid itemObject or InitialStock missing", itemObject);
-    // Potentially throw an error or handle as appropriate
+    console.error("[inventoryStore] recalculateInventoryFieldsForItem: Invalid itemObject or InitialStock missing", itemObject);
     return; 
   }
   const numericItemID = Number(itemObject.ItemID);
   const relevantActivities = fullActivityLog.filter(entry => Number(entry.ItemID) === numericItemID);
 
-  let totalUsedOrLost = 0;
-  relevantActivities.forEach(entry => {
-    if (entry.Action === "Used" || entry.Action === "Lost") {
-      totalUsedOrLost += Math.abs(Number(entry.Qty) || 0); // Changed to entry.Qty
-    }
-  });
-
-  itemObject.ActualStock = Number(itemObject.InitialStock) - totalUsedOrLost;
-  if (itemObject.ActualStock < 0) {
-    itemObject.ActualStock = 0;
-  }
-
-  // Corrected QtyRemaining calculation
+  // Calculate totalBorrowed
   const totalBorrowed = relevantActivities
     .filter(entry => entry.Action === "Borrowed")
-    .reduce((sum, entry) => sum + Math.abs(Number(entry.Qty || 0)), 0); // Changed to entry.Qty
+    .reduce((sum, entry) => sum + Number(entry.Qty || 0), 0);
+  console.log(`[inventoryStore] ItemID: ${itemObject.ItemID}, totalBorrowed: ${totalBorrowed}`);
 
+  // Calculate totalReturned
   const totalReturned = relevantActivities
     .filter(entry => entry.Action === "Returned")
-    .reduce((sum, entry) => sum + Math.abs(Number(entry.Qty || 0)), 0); // Changed to entry.Qty
+    .reduce((sum, entry) => sum + Number(entry.Qty || 0), 0);
+  console.log(`[inventoryStore] ItemID: ${itemObject.ItemID}, totalReturned: ${totalReturned}`);
 
-  const netBorrowed = totalBorrowed - totalReturned;
-  itemObject.QtyRemaining = itemObject.ActualStock - netBorrowed;
+  // Calculate netUnreturnedQuantity
+  const netUnreturnedQuantity = totalBorrowed - totalReturned;
+  console.log(`[inventoryStore] ItemID: ${itemObject.ItemID}, netUnreturnedQuantity: ${netUnreturnedQuantity}`);
 
-  // Apply caps
-  if (itemObject.QtyRemaining < 0) {
-    itemObject.QtyRemaining = 0;
+  const initialStockForCalc = Number(itemObject.InitialStock);
+  console.log(`[inventoryStore] ItemID: ${itemObject.ItemID}, InitialStock for calculation: ${initialStockForCalc}`);
+
+  // Calculate newQtyRemaining
+  let newQtyRemaining = initialStockForCalc - netUnreturnedQuantity;
+  console.log(`[inventoryStore] ItemID: ${itemObject.ItemID}, newQtyRemaining before capping: ${newQtyRemaining}`);
+
+  // Apply caps to newQtyRemaining
+  if (newQtyRemaining < 0) {
+    newQtyRemaining = 0;
   }
-  if (itemObject.QtyRemaining > itemObject.ActualStock) {
-    itemObject.QtyRemaining = itemObject.ActualStock;
+  if (newQtyRemaining > initialStockForCalc) {
+    newQtyRemaining = initialStockForCalc; // Cannot exceed initial stock
   }
+
+  itemObject.QtyRemaining = newQtyRemaining;
+  console.log(`[inventoryStore] ItemID: ${itemObject.ItemID}, final QtyRemaining: ${itemObject.QtyRemaining}`);
 }
 
 // EXPORTED function

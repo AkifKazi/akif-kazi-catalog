@@ -60,6 +60,11 @@ ipcMain.handle("add-activity", async (event, entry) => {
     }
     // Check if enough quantity is available before logging the activity
     const requestedQty = Number(entry.Qty) || 0;
+
+    // Add detailed logging before stock check
+    console.log(`[main.js] add-activity: Attempting to borrow ItemID: ${entry.ItemID}, Requested Qty: ${requestedQty}`);
+    console.log(`[main.js] add-activity: Item details from inventory - ID: ${itemToLogFor.ItemID}, InitialStock: ${itemToLogFor.InitialStock}, QtyRemaining (AvailableStock): ${itemToLogFor.QtyRemaining}`);
+
     if ((itemToLogFor.QtyRemaining || 0) < requestedQty) {
         return { success: false, error: `Not enough stock for item ID ${entry.ItemID}. Available: ${itemToLogFor.QtyRemaining || 0}, Requested: ${requestedQty}` };
     }
@@ -132,58 +137,53 @@ ipcMain.handle("record-staff-action", async (event, details) => {
       }
     }
 
-    // 2. Record "Lost" action for the difference
-    const qtyImplicitlyLost = originalBorrowedQty - qtyConfirmedReceived;
-    if (qtyImplicitlyLost > 0) {
-      const lostActivityDetails = {
-        UserID: details.staffUser.UserID, // Same user context
-        UserName: details.staffUser.UserName,
-        UserSpecs: details.staffUser.UserSpecs,
-        ItemID: details.itemData.ItemID, // Same item
-        ItemName: details.itemData.ItemName,
-        ItemSpecs: details.itemData.ItemSpecs,
-        Qty: qtyImplicitlyLost,
-        originalBorrowActivityID: details.originalBorrowActivityID, // Link to the same borrow
-        Notes: `Implicitly recorded as lost. Original note: ${details.notes || ""}` // System note
-      };
-      // QtyRemainingForItem will be set after all processing by updateInventoryAfterActivity
-      const lostResult = await recordStaffLost(lostActivityDetails);
-      if (!lostResult.success) {
-        overallSuccess = false;
-        errors.push(lostResult.error || "Failed to record implicit lost action.");
-      }
-    }
+    // 2. Record "Lost" action for the difference - REMOVED as per new logic
+    // const qtyImplicitlyLost = originalBorrowedQty - qtyConfirmedReceived;
+    // if (qtyImplicitlyLost > 0) {
+    //   const lostActivityDetails = {
+    //     UserID: details.staffUser.UserID,
+    //     UserName: details.staffUser.UserName,
+    //     UserSpecs: details.staffUser.UserSpecs,
+    //     ItemID: details.itemData.ItemID,
+    //     ItemName: details.itemData.ItemName,
+    //     ItemSpecs: details.itemData.ItemSpecs,
+    //     Qty: qtyImplicitlyLost,
+    //     originalBorrowActivityID: details.originalBorrowActivityID,
+    //     Notes: `Implicitly recorded as lost. Original note: ${details.notes || ""}`
+    //   };
+    //   const lostResult = await recordStaffLost(lostActivityDetails);
+    //   if (!lostResult.success) {
+    //     overallSuccess = false;
+    //     errors.push(lostResult.error || "Failed to record implicit lost action.");
+    //   }
+    // }
 
     // 3. Update inventory based on ALL activities (including new ones)
-    // It's crucial that getActivityLog() inside updateInventoryAfterActivity or if called before it,
-    // fetches the most up-to-date log including the records just added.
-    // Assuming activityStore functions (recordStaffReturn, recordStaffLost) correctly update the underlying store
-    // before updateInventoryAfterActivity fetches from it.
-    
-    const currentActivityLog = await getActivityLog(); // Get the freshest log
+    // Fetch the activity log *after* the new "Returned" activity (if any) has been added.
+    const currentActivityLog = await getActivityLog();
     const inventoryUpdateResult = await updateInventoryAfterActivity(details.itemData.ItemID, currentActivityLog);
 
-    if (!inventoryUpdateResult || !inventoryUpdateResult.success) {
+    if (!inventoryUpdateResult || !inventoryUpdateResult.success || !inventoryUpdateResult.updatedItem) {
       overallSuccess = false;
-      errors.push(inventoryUpdateResult.error || "Failed to update inventory after actions.");
-      // If inventory update fails, QtyRemainingForItem might be stale or undefined
+      errors.push(inventoryUpdateResult.error || "Failed to update inventory after return action.");
       finalQtyRemainingForItem = 'Error updating inventory'; 
     } else {
       finalQtyRemainingForItem = inventoryUpdateResult.updatedItem.QtyRemaining;
     }
 
     if (overallSuccess) {
-      // The success response should indicate the final state.
-      // The individual results of recordStaffReturn/Lost are important for logging,
-      // but the main success is that the process completed and inventory is updated.
       return { 
         success: true, 
-        message: "Staff action processed.", 
+        message: "Staff action processed successfully. Inventory updated.",
         qtyRemaining: finalQtyRemainingForItem,
-        activityLog: currentActivityLog // Add this line
+        // Optionally, include the specific returned activity or the whole log if useful for frontend
+        // returnedActivity: returnResult ? returnResult.newActivity : null,
+        // activityLog: currentActivityLog
       };
     } else {
-      return { success: false, error: errors.join("; ") };
+      // If errors occurred, particularly if the return action failed but we proceeded to inventory update.
+      // It's better to return a consolidated error message.
+      return { success: false, error: errors.join("; ") || "Unknown error during staff action processing." };
     }
 
   } catch (error) {
