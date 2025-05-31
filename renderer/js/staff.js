@@ -8,6 +8,35 @@ document.addEventListener('DOMContentLoaded', () => {
         staffUserInfoElement.textContent = "Staff: Not Logged In";
     }
     loadAndRenderActivityLog();
+
+    // Event listener for the Clear Data button
+    const clearDataButton = document.getElementById('clear-data-button');
+    if (clearDataButton) {
+        clearDataButton.addEventListener('click', async () => {
+            try {
+                // Confirmation dialog before proceeding
+                const userConfirmed = confirm("Are you sure you want to clear ALL application data? This action cannot be undone and will remove all inventory, user, and activity logs.");
+                if (!userConfirmed) {
+                    alert('Data clearing was cancelled.');
+                    return;
+                }
+
+                const result = await window.electronAPI.clearAllData();
+                if (result.success) {
+                    alert(result.message || 'All application data has been cleared. The application may require a restart or data re-import.');
+                    // Optional: Redirect to login page or reload
+                    // window.location.href = 'login.html';
+                    // Or, to simply reload the current page if staff might need to re-import immediately:
+                    // window.location.reload();
+                } else {
+                    alert(result.message || 'Data clearing failed or was cancelled by the main process.');
+                }
+            } catch (error) {
+                console.error('Error during clearAllData IPC call:', error);
+                alert('An error occurred while trying to clear data. Check the console for details.');
+            }
+        });
+    }
 });
 
 async function loadAndRenderActivityLog(logEntriesToShow) {
