@@ -87,8 +87,8 @@ async function loadAndRenderActivityLog(logEntriesToShow) {
         <p><strong>Item:</strong> ${entry.ItemName} (${entry.ItemSpecs}, ID: ${entry.ItemID})</p>
         <p><strong>Quantity:</strong> ${entry.Qty}</p>
         <p><strong>Timestamp:</strong> ${entry.Timestamp}</p>
-        <p><strong>Item Qty Remaining (at time of log):</strong> ${entry.QtyRemaining}</p>
       `;
+      // Removed: <p><strong>Item Qty Remaining (at time of log):</strong> ${entry.QtyRemaining}</p>
       if (entry.originalBorrowActivityID) {
         entryDetailsHtml += `<p><strong>Original Borrow ID:</strong> ${entry.originalBorrowActivityID}</p>`;
       }
@@ -208,24 +208,20 @@ async function handleStaffAction(borrowActivityID, itemData, activeBorrowedQty, 
 
   try {
     const result = await window.electronAPI.recordStaffAction(details);
-    if (result && result.success && result.activityLog) {
-      window.electronAPI.showNotification("Success", `${qtyToProcess}/${originalBorrowedQty} Returned`);
+    // Response is now { success: true, message: "Return processed...", updatedItem: ... }
+    // It no longer includes result.activityLog
+    if (result && result.success) {
+      const successMessage = result.message || `${qtyToProcess} item(s) processed successfully.`;
+      window.electronAPI.showNotification("Success", successMessage);
       
       if (notesInputElement) {
           notesInputElement.value = ""; 
       }
-      // qtyReceivedElement is already defined in the outer scope of this function
       if (qtyReceivedElement) {
           qtyReceivedElement.value = ""; // Clear the input
       }
       
-      loadAndRenderActivityLog(result.activityLog); // Pass the fresh log
-    } else if (result && result.success) {
-        // Fallback if activityLog is somehow missing from a successful response
-        window.electronAPI.showNotification("Success", `${qtyToProcess}/${originalBorrowedQty} Returned (UI will refresh)`);
-        if (notesInputElement) { notesInputElement.value = ""; }
-        if (qtyReceivedElement) { qtyReceivedElement.value = ""; }
-        loadAndRenderActivityLog(); // Call without log, will fetch
+      loadAndRenderActivityLog(); // Call without log, will fetch fresh data
     } else {
       window.electronAPI.showNotification("Error", `Failed to record action: ${result ? result.error : 'Unknown error'}`);
       // Clear processing message and re-enable button on error

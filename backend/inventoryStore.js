@@ -88,13 +88,12 @@ function loadExcelFile(filePath, type = "inventory") {
         }
         
         // Remove the original 'Stock' column if it exists, to avoid confusion
-        if (stockColumnName) {
+        // and to prevent it from being part of the final item object if it was different casing.
+        if (stockColumnName && stockColumnName.toLowerCase() !== 'stock') {
             delete newRow[stockColumnName];
         }
 
-        newRow.InitialStock = stockValue;
-        // newRow.ActualStock = stockValue; // ActualStock removed as per requirement
-        newRow.QtyRemaining = stockValue; // QtyRemaining initialized to InitialStock (stockValue)
+        newRow.Stock = stockValue; // Use 'Stock' property
         
         // Ensure ItemID is a number if it exists
         if (newRow.ItemID !== undefined) {
@@ -106,7 +105,26 @@ function loadExcelFile(filePath, type = "inventory") {
 
         return newRow;
       });
-      inventory = processedInventory;
+
+      if (inventory.length > 0) {
+        // Re-import logic: Update existing inventory or add new items
+        processedInventory.forEach(excelItem => {
+          const existingItemIndex = inventory.findIndex(invItem => String(invItem.ItemID) === String(excelItem.ItemID));
+          if (existingItemIndex !== -1) {
+            // Update stock of existing item
+            inventory[existingItemIndex].Stock = excelItem.Stock;
+            // Preserve other properties of the existing item
+            // For example, if there were other fields managed by the app not present in Excel:
+            // inventory[existingItemIndex] = { ...inventory[existingItemIndex], Stock: excelItem.Stock };
+          } else {
+            // Add new item from Excel
+            inventory.push(excelItem);
+          }
+        });
+      } else {
+        // Initial import or inventory was empty
+        inventory = processedInventory;
+      }
       saveInventory();
     } else if (type === "users") {
       // For users, ensure UserID is a number if it exists
@@ -145,86 +163,61 @@ function getUsers() {
   return users;
 }
 
-// Helper function - NOT EXPORTED
-function recalculateInventoryFieldsForItem(itemObject, fullActivityLog) {
-  console.log(`[inventoryStore] recalculateInventoryFieldsForItem for ItemID: ${itemObject.ItemID}, Initial Data: ${JSON.stringify(itemObject)}`);
+function updateItemStock(itemID, quantityChange) {
+  const itemIndex = inventory.findIndex(item => String(item.ItemID) === String(itemID));
 
-  if (!itemObject || itemObject.InitialStock === undefined) {
-    console.error("[inventoryStore] recalculateInventoryFieldsForItem: Invalid itemObject or InitialStock missing", itemObject);
-    return; 
-  }
-  const numericItemID = Number(itemObject.ItemID);
-  const relevantActivities = fullActivityLog.filter(entry => Number(entry.ItemID) === numericItemID);
-
-  // Calculate totalBorrowed
-  const totalBorrowed = relevantActivities
-    .filter(entry => entry.Action === "Borrowed")
-    .reduce((sum, entry) => sum + Number(entry.Qty || 0), 0);
-  console.log(`[inventoryStore] ItemID: ${itemObject.ItemID}, totalBorrowed: ${totalBorrowed}`);
-
-  // Calculate totalReturned
-  const totalReturned = relevantActivities
-    .filter(entry => entry.Action === "Returned")
-    .reduce((sum, entry) => sum + Number(entry.Qty || 0), 0);
-  console.log(`[inventoryStore] ItemID: ${itemObject.ItemID}, totalReturned: ${totalReturned}`);
-
-  // Calculate netUnreturnedQuantity
-  const netUnreturnedQuantity = totalBorrowed - totalReturned;
-  console.log(`[inventoryStore] ItemID: ${itemObject.ItemID}, netUnreturnedQuantity: ${netUnreturnedQuantity}`);
-
-  const initialStockForCalc = Number(itemObject.InitialStock);
-  console.log(`[inventoryStore] ItemID: ${itemObject.ItemID}, InitialStock for calculation: ${initialStockForCalc}`);
-
-  // Calculate newQtyRemaining
-  let newQtyRemaining = initialStockForCalc - netUnreturnedQuantity;
-  console.log(`[inventoryStore] ItemID: ${itemObject.ItemID}, newQtyRemaining before capping: ${newQtyRemaining}`);
-
-  // Apply caps to newQtyRemaining
-  if (newQtyRemaining < 0) {
-    newQtyRemaining = 0;
-  }
-  if (newQtyRemaining > initialStockForCalc) {
-    newQtyRemaining = initialStockForCalc; // Cannot exceed initial stock
+  if (itemIndex === -1) {
+    return { success: false, error: `Item with ID ${itemID} not found.` };
   }
 
-  itemObject.QtyRemaining = newQtyRemaining;
-  console.log(`[inventoryStore] ItemID: ${itemObject.ItemID}, final QtyRemaining: ${itemObject.QtyRemaining}`);
+  const item = inventory[itemIndex];
+  const currentStock = Number(item.Stock);
+  const change = Number(quantityChange);
+
+  if (isNaN(currentStock)) {
+    console.warn(`Item ${itemID} has an invalid current stock: ${item.Stock}. Assuming 0.`);
+    item.Stock = 0; // Reset to 0 if invalid
+  }
+  if (isNaN(change)) {
+    return { success: false, error: `Invalid quantityChange: ${quantityChange}. Must be a number.` };
+  }
+
+  item.Stock = Number(item.Stock) + change;
+
+  if (item.Stock < 0) {
+    console.warn(`Item ${itemID} stock fell below zero (${item.Stock}). Setting to 0.`);
+    item.Stock = 0;
+  }
+
+  saveInventory();
+  return { success: true, updatedItem: item };
 }
 
-// EXPORTED function
-function updateInventoryAfterActivity(itemID, fullActivityLog) {
-  const numericItemID = Number(itemID); // Ensure numeric comparison
-  if (isNaN(numericItemID)) {
-    console.error(`updateInventoryAfterActivity: Invalid ItemID provided: ${itemID}`);
-    return { success: false, error: `Invalid ItemID: ${itemID}` };
-  }
+function exportInventory(filePath) {
+  try {
+    // We can choose to export only specific fields, or all fields.
+    // For now, let's assume direct export of existing item properties is fine.
+    // If specific columns or order is needed, map the inventory array here.
+    // Example: const dataToExport = inventory.map(item => ({ ItemID: item.ItemID, Name: item.ItemName, Stock: item.Stock, ... }));
+    const dataToExport = inventory;
 
-  const itemIndex = inventory.findIndex(invItem => Number(invItem.ItemID) === numericItemID);
-
-  if (itemIndex !== -1) {
-    // Ensure InitialStock is a number before recalculating
-    if (inventory[itemIndex].InitialStock === undefined || isNaN(Number(inventory[itemIndex].InitialStock))) {
-        console.error(`Item ${numericItemID} has invalid or missing InitialStock: ${inventory[itemIndex].InitialStock}. Cannot recalculate.`);
-        inventory[itemIndex].InitialStock = 0; // Default to 0 if missing/invalid to prevent further errors.
-    } else {
-        inventory[itemIndex].InitialStock = Number(inventory[itemIndex].InitialStock);
-    }
-
-    recalculateInventoryFieldsForItem(inventory[itemIndex], fullActivityLog);
-    saveInventory(); // Persist changes
-    return { success: true, updatedItem: inventory[itemIndex] };
-  } else {
-    console.warn(`updateInventoryAfterActivity: Item with ID ${numericItemID} not found.`);
-    return { success: false, error: `Item with ID ${numericItemID} not found.` };
+    const worksheet = XLSX.utils.json_to_sheet(dataToExport);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Inventory");
+    XLSX.writeFile(workbook, filePath);
+    return { success: true };
+  } catch (err) {
+    console.error("Error exporting inventory:", err);
+    return { success: false, error: err.message };
   }
 }
-
 
 module.exports = {
   loadExcelFile,
   getInventory,
   getUsers,
-  updateInventoryAfterActivity, // Added for export
+  updateItemStock,
+  exportInventory, // Export the new function
   // Export save functions if they need to be called from elsewhere, though not strictly required by current instructions
   // saveInventory,
   // saveUsers

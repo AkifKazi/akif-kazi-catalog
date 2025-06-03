@@ -75,8 +75,8 @@ function renderSuggestions() {
   suggestions.forEach((item, idx) => {
     const li = document.createElement("li");
     li.textContent = `${item.ItemName} — ${item.ItemSpecs}`;
-    // Use item.QtyRemaining from the inventory list
-    if (item.QtyRemaining <= 0) {
+    // Use item.Stock from the inventory list
+    if (item.Stock <= 0) {
       li.style.border = "1px solid red";
     }
     if (idx === selectedIndex) {
@@ -90,17 +90,18 @@ function addToCart(item) {
   // 'item' here is from the main inventory list (suggestions)
   const foundInCart = cart.find(c => c.ItemID === item.ItemID);
   if (foundInCart) {
-    // Use QtyRemaining from the item object stored in the cart for comparison
-    if (foundInCart.quantity < foundInCart.QtyRemaining) {
+    // Use Stock from the item object stored in the cart for comparison
+    if (foundInCart.quantity < foundInCart.Stock) {
       foundInCart.quantity++;
     } else {
-      alert(`Max quantity reached (${foundInCart.QtyRemaining}) for ${foundInCart.ItemName}.`);
+      alert(`Max quantity reached (${foundInCart.Stock}) for ${foundInCart.ItemName}.`);
     }
   } else {
-    // Use QtyRemaining from the inventory item for initial add
-    if (item.QtyRemaining > 0) {
-      // Store the item's current QtyRemaining in the cart item itself
-      cart.push({ ...item, quantity: 1 }); // This copies ItemID, ItemName, ItemSpecs, and QtyRemaining
+    // Use Stock from the inventory item for initial add
+    if (item.Stock > 0) {
+      // Store the item's current Stock in the cart item itself
+      // The spread operator { ...item } will copy the Stock property at this moment.
+      cart.push({ ...item, quantity: 1 });
     } else {
       alert(`${item.ItemName} is out of stock.`);
     }
@@ -110,14 +111,14 @@ function addToCart(item) {
 
 function renderCart() {
   cartDiv.innerHTML = "";
-  cart.forEach((cartItem, idx) => { // cartItem here includes QtyRemaining
+  cart.forEach((cartItem, idx) => { // cartItem here includes Stock
     const div = document.createElement("div");
     div.classList.add("cart-item");
     div.innerHTML = `
       ${cartItem.ItemName} (${cartItem.ItemSpecs}) 
       <button onclick="updateQty(${idx}, -1)">-</button>
-      <input type="number" min="1" max="${cartItem.QtyRemaining}" value="${cartItem.quantity}" onchange="manualQty(${idx}, this.value)" style="width: 50px;" />
-      <button onclick="updateQty(${idx}, 1)" ${cartItem.quantity >= cartItem.QtyRemaining ? "disabled" : ""}>+</button>
+      <input type="number" min="1" max="${cartItem.Stock}" value="${cartItem.quantity}" onchange="manualQty(${idx}, this.value)" style="width: 50px;" />
+      <button onclick="updateQty(${idx}, 1)" ${cartItem.quantity >= cartItem.Stock ? "disabled" : ""}>+</button>
       <button onclick="removeItem(${idx})">x</button>
     `;
     cartDiv.appendChild(div);
@@ -125,11 +126,11 @@ function renderCart() {
 }
 
 function updateQty(index, delta) {
-  const cartItem = cart[index]; // cartItem includes QtyRemaining
+  const cartItem = cart[index]; // cartItem includes Stock
   const newQty = cartItem.quantity + delta;
 
-  if (newQty > cartItem.QtyRemaining) {
-    alert(`Max quantity for ${cartItem.ItemName} is ${cartItem.QtyRemaining}.`);
+  if (newQty > cartItem.Stock) {
+    alert(`Max quantity for ${cartItem.ItemName} is ${cartItem.Stock}.`);
   } else if (newQty <= 0) {
     cart.splice(index, 1); // Remove item if quantity is zero or less
   } else {
@@ -139,16 +140,16 @@ function updateQty(index, delta) {
 }
 
 function manualQty(index, value) {
-  const cartItem = cart[index]; // cartItem includes QtyRemaining
+  const cartItem = cart[index]; // cartItem includes Stock
   let qty = parseInt(value);
 
   if (isNaN(qty) || qty <= 0) {
     qty = 1; // Default to 1 if invalid input or less than 1
   }
   
-  if (qty > cartItem.QtyRemaining) {
-    alert(`Max quantity for ${cartItem.ItemName} is ${cartItem.QtyRemaining}. You entered ${value}.`);
-    qty = cartItem.QtyRemaining; // Cap at max available
+  if (qty > cartItem.Stock) {
+    alert(`Max quantity for ${cartItem.ItemName} is ${cartItem.Stock}. You entered ${value}.`);
+    qty = cartItem.Stock; // Cap at max available
   }
   cartItem.quantity = qty;
   renderCart();
@@ -213,7 +214,9 @@ async function borrowItems() {
   }
 
   if (allItemsProcessedSuccessfully && cart.length > 0) {
-    alert(`You’ve successfully borrowed ${borrowedItemsCount} items.`);
+    // Use message from activityAddResult if available, otherwise default
+    const successMessage = activityAddResult && activityAddResult.message ? activityAddResult.message : `You’ve successfully borrowed ${borrowedItemsCount} items.`;
+    alert(successMessage);
     cart = []; // Clear cart
     renderCart(); // Update UI
     
@@ -226,7 +229,7 @@ async function borrowItems() {
 
   } else if (!allItemsProcessedSuccessfully && cart.length > 0) {
     alert("Some items could not be processed. Please review your cart and try again, or check your activity log for details.");
-    // Refresh inventory to reflect any committed changes and current QtyRemaining
+    // Refresh inventory to reflect any committed changes and current Stock
     window.electronAPI.getInventory().then(data => {
       inventory = data;
       fuse.setCollection(inventory);

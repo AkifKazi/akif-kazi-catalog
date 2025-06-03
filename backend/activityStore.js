@@ -46,73 +46,76 @@ loadActivityLog(); // Load data when the module is initialized
 // It expects entry.Qty (positive) and entry.QtyRemaining (overall item qty remaining)
 function addActivity(entry) {
   try {
-    const newEntry = { ...entry }; // Clone to avoid modifying the original object if passed by reference
-    newEntry.activityID = nextActivityId++;
+    // entry should contain: UserID, UserName, UserSpecs, Action: "Borrowed", ItemID, ItemName, ItemSpecs, Qty, Timestamp
+    const newActivity = { ...entry };
+    newActivity.activityID = nextActivityId++;
     
-    // Ensure Qty is positive, as per requirements
-    if (newEntry.Qty !== undefined) {
-        newEntry.Qty = Math.abs(Number(newEntry.Qty) || 0);
+    // Ensure Qty is a number, should be positive for borrowed.
+    // The actual check for sufficient stock and negative update will be in main.js
+    if (newActivity.Qty !== undefined) {
+        newActivity.Qty = Number(newActivity.Qty);
+        if (isNaN(newActivity.Qty)) {
+            console.warn(`addActivity: Invalid Qty provided: ${entry.Qty}. Defaulting to 0.`);
+            newActivity.Qty = 0;
+        }
     } else {
         console.warn("addActivity: Qty is undefined. Defaulting to 0.");
-        newEntry.Qty = 0;
+        newActivity.Qty = 0;
     }
 
-    // QtyRemaining is passed in and should be stored as is.
-    // newEntry.QtyRemaining should already be set from the caller.
+    // Action should be "Borrowed" as per new design
+    newActivity.Action = "Borrowed";
 
-    activityLog.push(newEntry);
+    activityLog.push(newActivity);
     saveActivityLog();
-    return { success: true, newActivity: newEntry };
+    return { success: true, newActivity: newActivity };
   } catch (error) {
-    console.error("Error in addActivity:", error);
+    console.error("Error in addActivity (Borrowed):", error);
     return { success: false, error: error.message };
   }
 }
 
-// Generic function for staff to record actions (Used, Lost, Returned)
-function recordStaffAction(details, actionType) {
+// recordStaffReturn is used for "Returned" actions by staff.
+// details should contain: UserID (staff), UserName (staff), UserSpecs (staff),
+// Action: "Returned", ItemID, ItemName, ItemSpecs, Qty (returned),
+// Timestamp, originalBorrowActivityID, Notes.
+function recordStaffReturn(details) {
   try {
     const newEntry = {
       activityID: nextActivityId++,
-      UserID: details.UserID,
-      UserName: details.UserName,
-      UserSpecs: details.UserSpecs,
-      Action: actionType, // "Returned", "Used", "Lost"
+      UserID: details.UserID, // Staff UserID
+      UserName: details.UserName, // Staff UserName
+      UserSpecs: details.UserSpecs, // Staff UserSpecs (e.g., role)
+      Action: "Returned", // Fixed action type
       ItemID: details.ItemID,
       ItemName: details.ItemName,
-      ItemSpecs: details.ItemSpecs,
-      Qty: Math.abs(Number(details.Qty) || 0), // Ensure Qty is positive
-      QtyRemaining: details.QtyRemainingForItem, // Overall item quantity remaining
-      Timestamp: new Date().toLocaleString(),
-      originalBorrowActivityID: details.originalBorrowActivityID || null,
-      Notes: details.Notes || ""
+      ItemSpecs: details.ItemSpecs, // Item specifications
+      Qty: Number(details.Qty) || 0, // Quantity returned, ensure it's a number
+      Timestamp: details.Timestamp || new Date().toLocaleString(), // Timestamp of the return
+      originalBorrowActivityID: details.originalBorrowActivityID, // Link to the original borrow activity
+      Notes: details.Notes || "" // Any notes related to the return
     };
+
+    // Validate Qty
+    if (isNaN(newEntry.Qty)) {
+        console.warn(`recordStaffReturn: Invalid Qty provided: ${details.Qty}. Defaulting to 0.`);
+        newEntry.Qty = 0;
+    }
+
     activityLog.push(newEntry);
     saveActivityLog();
     return { success: true, newActivity: newEntry };
   } catch (error) {
-    console.error(`Error in recordStaffAction (${actionType}):`, error);
+    console.error("Error in recordStaffReturn:", error);
     return { success: false, error: error.message };
   }
-}
-
-function recordStaffReturn(details) {
-  return recordStaffAction(details, "Returned");
-}
-
-function recordStaffUsed(details) {
-  return recordStaffAction(details, "Used");
-}
-
-function recordStaffLost(details) {
-  return recordStaffAction(details, "Lost");
 }
 
 function getActivityLog() {
   return activityLog;
 }
 
-function exportActivityLog(filepath) {
+function exportReturnedActivitiesLog(filepath) {
   const returnedActivities = activityLog.filter(entry => entry.Action === "Returned");
   const exportData = [];
 
@@ -121,38 +124,81 @@ function exportActivityLog(filepath) {
       bEntry => bEntry.activityID === returnEntry.originalBorrowActivityID && bEntry.Action === "Borrowed"
     );
 
+    // Staff details from the return entry
+    const staffUserID = returnEntry.UserID;
+    const staffUserName = returnEntry.UserName;
+
     let row = {
-      "Student ID": originalBorrowEntry ? originalBorrowEntry.UserID : null,
-      "Name": originalBorrowEntry ? originalBorrowEntry.UserName : null,
-      "Batch": originalBorrowEntry ? originalBorrowEntry.UserSpecs : null,
-      "Returned": Math.abs(Number(returnEntry.Qty) || 0), // Ensure positive
-      "Borrowed": originalBorrowEntry ? Math.abs(Number(originalBorrowEntry.Qty) || 0) : null, // Ensure positive
-      "Item": originalBorrowEntry ? originalBorrowEntry.ItemName : null,
-      "Details": originalBorrowEntry ? originalBorrowEntry.ItemSpecs : null,
-      "Borrow Timestamp": originalBorrowEntry ? originalBorrowEntry.Timestamp : null,
-      "Return Timestamp": returnEntry.Timestamp,
-      // Notes will be aggregated below
+      // Original Borrower Details
+      "Borrower UserID": originalBorrowEntry ? originalBorrowEntry.UserID : null,
+      "Borrower UserName": originalBorrowEntry ? originalBorrowEntry.UserName : null,
+      "Borrower UserSpecs": originalBorrowEntry ? originalBorrowEntry.UserSpecs : null,
+      // Item Details
+      "ItemID": originalBorrowEntry ? originalBorrowEntry.ItemID : returnEntry.ItemID, // Fallback to return entry if needed
+      "ItemName": originalBorrowEntry ? originalBorrowEntry.ItemName : returnEntry.ItemName,
+      "ItemSpecs": originalBorrowEntry ? originalBorrowEntry.ItemSpecs : returnEntry.ItemSpecs,
+      // Borrowed Details
+      "Borrowed Qty": originalBorrowEntry ? (Number(originalBorrowEntry.Qty) || 0) : null,
+      "Borrowed Timestamp": originalBorrowEntry ? originalBorrowEntry.Timestamp : null,
+      // Returned Details
+      "Returned Qty": Number(returnEntry.Qty) || 0,
+      "Returned Timestamp": returnEntry.Timestamp,
+      "Return Notes": returnEntry.Notes || "",
+      // Staff Details
+      "Staff UserID": staffUserID,
+      "Staff UserName": staffUserName,
     };
-
-    row["Notes"] = returnEntry.Notes || ""; // Use only the note from the "Returned" action.
-
     exportData.push(row);
   });
 
   const worksheet = XLSX.utils.json_to_sheet(exportData, { 
-    header: ["Student ID", "Name", "Batch", "Returned", "Borrowed", "Item", "Details", "Borrow Timestamp", "Return Timestamp", "Notes"] 
+    header: [
+      "Borrower UserID", "Borrower UserName", "Borrower UserSpecs",
+      "ItemID", "ItemName", "ItemSpecs",
+      "Borrowed Qty", "Borrowed Timestamp",
+      "Returned Qty", "Returned Timestamp", "Return Notes",
+      "Staff UserID", "Staff UserName"
+    ]
   });
   const workbook = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(workbook, worksheet, "Activity Log");
+  XLSX.utils.book_append_sheet(workbook, worksheet, "Returned Activities");
   XLSX.writeFile(workbook, filepath);
+}
+
+function exportAllActivitiesLog(filePath) {
+  const exportData = activityLog.map(entry => ({
+    "ActivityID": entry.activityID,
+    "Timestamp": entry.Timestamp,
+    "Action": entry.Action, // "Borrowed" or "Returned"
+    "UserID": entry.UserID, // Student or Staff ID
+    "UserName": entry.UserName,
+    "UserSpecs": entry.UserSpecs,
+    "ItemID": entry.ItemID,
+    "ItemName": entry.ItemName,
+    "ItemSpecs": entry.ItemSpecs,
+    "Qty": Number(entry.Qty) || 0, // Quantity for this specific transaction
+    "Notes": entry.Notes || "", // Mainly for returns
+    "OriginalBorrowActivityID": entry.originalBorrowActivityID || "" // For returns
+  }));
+
+  const worksheet = XLSX.utils.json_to_sheet(exportData, {
+    header: [
+      "ActivityID", "Timestamp", "Action",
+      "UserID", "UserName", "UserSpecs",
+      "ItemID", "ItemName", "ItemSpecs",
+      "Qty", "Notes", "OriginalBorrowActivityID"
+    ]
+  });
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, worksheet, "All Activities");
+  XLSX.writeFile(workbook, filePath);
 }
 
 module.exports = {
   addActivity, // For "Borrowed" logs
   getActivityLog,
-  recordStaffReturn,
-  recordStaffUsed,
-  recordStaffLost,
-  exportActivityLog
+  recordStaffReturn, // For "Returned" logs by staff
+  exportReturnedActivitiesLog,
+  exportAllActivitiesLog
   // saveActivityLog // Not explicitly required to be exported
 };

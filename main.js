@@ -2,192 +2,249 @@ const { app, BrowserWindow, Menu, dialog, ipcMain, Notification } = require("ele
 const path = require("path");
 
 // Updated imports
-const { loadExcelFile, getInventory, getUsers, updateInventoryAfterActivity } = require("./backend/inventoryStore");
+const { loadExcelFile, getInventory, getUsers, updateItemStock, exportInventory } = require("./backend/inventoryStore"); // Added exportInventory
 const {
   addActivity, // For "Borrowed"
   getActivityLog,
-  exportActivityLog, // Updated to filter itself
-  recordStaffReturn,
-  recordStaffUsed,
-  recordStaffLost
+  recordStaffReturn, // Simplified
+  // recordStaffUsed, // Removed
+  // recordStaffLost, // Removed
+  exportReturnedActivitiesLog, // New specific export
+  exportAllActivitiesLog // New specific export (renamed from generic exportActivityLog)
 } = require("./backend/activityStore");
 
-// Refactored function to handle activity log export - This should still work
-async function handleExportActivityLog(browserWindow) {
+// Updated function to handle ALL activity log export
+async function handleExportActivityLog(browserWindow) { // Renamed for clarity, now exports ALL activities
   if (!browserWindow) {
-    console.error("BrowserWindow instance is required to show save dialog.");
+    console.error("BrowserWindow instance is required to show save dialog for all activities export.");
     return { success: false, error: "BrowserWindow instance not available." };
   }
   try {
     const result = await dialog.showSaveDialog(browserWindow, {
-      title: 'Save Activity Log',
-      defaultPath: "activity.xlsx",
+      title: 'Save All Activities Log',
+      defaultPath: "all_activities.xlsx",
       filters: [{ name: 'Excel Files', extensions: ['xlsx'] }]
     });
 
     if (!result.canceled && result.filePath) {
-      exportActivityLog(result.filePath);
-      // Show message box on the provided browserWindow
-      dialog.showMessageBox(browserWindow, { 
+      exportAllActivitiesLog(result.filePath); // Use the new specific function
+      dialog.showMessageBox(browserWindow, {
         type: 'info',
         title: 'Export Successful',
-        message: 'Activity log exported successfully.' 
+        message: 'All activities log exported successfully.'
       });
       return { success: true, filePath: result.filePath };
     }
-    return { success: false, error: "Export cancelled by user." };
+    return { success: false, error: "Export (All Activities) cancelled by user." };
   } catch (error) {
-    console.error("Error exporting activity log:", error);
+    console.error("Error exporting all activities log:", error);
     dialog.showErrorBox("Export Error", `An error occurred: ${error.message}`);
     return { success: false, error: error.message };
   }
 }
 
+// New function to handle RETURNED activity log export
+async function handleExportReturnedActivitiesLog(browserWindow) {
+  if (!browserWindow) {
+    console.error("BrowserWindow instance is required to show save dialog for returned activities export.");
+    return { success: false, error: "BrowserWindow instance not available." };
+  }
+  try {
+    const result = await dialog.showSaveDialog(browserWindow, {
+      title: 'Save Returned Activities Log',
+      defaultPath: "returned_activities.xlsx",
+      filters: [{ name: 'Excel Files', extensions: ['xlsx'] }]
+    });
+
+    if (!result.canceled && result.filePath) {
+      exportReturnedActivitiesLog(result.filePath); // Use the new specific function
+      dialog.showMessageBox(browserWindow, {
+        type: 'info',
+        title: 'Export Successful',
+        message: 'Returned activities log exported successfully.'
+      });
+      return { success: true, filePath: result.filePath };
+    }
+    return { success: false, error: "Export (Returned Activities) cancelled by user." };
+  } catch (error) {
+    console.error("Error exporting returned activities log:", error);
+    dialog.showErrorBox("Export Error", `An error occurred: ${error.message}`);
+    return { success: false, error: error.message };
+  }
+}
+
+async function handleExportInventory(browserWindow) {
+  if (!browserWindow) {
+    console.error("BrowserWindow instance is required to show save dialog for inventory export.");
+    return { success: false, error: "BrowserWindow instance not available." };
+  }
+  try {
+    const result = await dialog.showSaveDialog(browserWindow, {
+      title: 'Save Inventory Export',
+      defaultPath: "inventory_export.xlsx",
+      filters: [{ name: 'Excel Files', extensions: ['xlsx'] }]
+    });
+
+    if (!result.canceled && result.filePath) {
+      const exportResult = exportInventory(result.filePath); // From inventoryStore
+      if (exportResult.success) {
+        dialog.showMessageBox(browserWindow, {
+          type: 'info',
+          title: 'Export Successful',
+          message: 'Inventory exported successfully.'
+        });
+        return { success: true, filePath: result.filePath };
+      } else {
+        dialog.showErrorBox("Export Error", `An error occurred during inventory export: ${exportResult.error}`);
+        return { success: false, error: exportResult.error };
+      }
+    }
+    return { success: false, error: "Export (Inventory) cancelled by user." };
+  } catch (error) {
+    console.error("Error exporting inventory:", error);
+    dialog.showErrorBox("Export Error", `An error occurred: ${error.message}`);
+    return { success: false, error: error.message };
+  }
+}
 
 // IPC Handlers
 ipcMain.handle("get-inventory", async () => getInventory());
 ipcMain.handle("get-users", async () => getUsers());
 
 ipcMain.handle("add-activity", async (event, entry) => {
+  // entry from frontend: { UserID, UserName, UserSpecs, ItemID, ItemName, ItemSpecs, Qty, Timestamp }
   try {
-    // 1. Get current QtyRemaining for the item FOR LOGGING PURPOSES and stock check
-    const currentInventory = getInventory(); // from inventoryStore
-    const itemToLogFor = currentInventory.find(i => Number(i.ItemID) === Number(entry.ItemID));
-    
-    // If item not found in inventory, it cannot be borrowed.
-    if (!itemToLogFor) {
-        return { success: false, error: `Item ID ${entry.ItemID} not found in inventory.` };
-    }
-    // Check if enough quantity is available before logging the activity
-    const requestedQty = Number(entry.Qty) || 0;
+    const currentInventory = getInventory();
+    const item = currentInventory.find(i => String(i.ItemID) === String(entry.ItemID));
 
-    // Add detailed logging before stock check
+    if (!item) {
+      return { success: false, error: `Item ID ${entry.ItemID} not found in inventory.` };
+    }
+
+    const requestedQty = Number(entry.Qty);
+    if (isNaN(requestedQty) || requestedQty <= 0) {
+      return { success: false, error: "Invalid quantity requested." };
+    }
+
     console.log(`[main.js] add-activity: Attempting to borrow ItemID: ${entry.ItemID}, Requested Qty: ${requestedQty}`);
-    console.log(`[main.js] add-activity: Item details from inventory - ID: ${itemToLogFor.ItemID}, InitialStock: ${itemToLogFor.InitialStock}, QtyRemaining (AvailableStock): ${itemToLogFor.QtyRemaining}`);
+    console.log(`[main.js] add-activity: Item details from inventory - ID: ${item.ItemID}, Stock: ${item.Stock}`);
 
-    if ((itemToLogFor.QtyRemaining || 0) < requestedQty) {
-        return { success: false, error: `Not enough stock for item ID ${entry.ItemID}. Available: ${itemToLogFor.QtyRemaining || 0}, Requested: ${requestedQty}` };
+    if (Number(item.Stock) < requestedQty) {
+      return { success: false, error: `Not enough stock for item ID ${entry.ItemID}. Available: ${item.Stock}, Requested: ${requestedQty}` };
     }
 
-    entry.QtyRemaining = itemToLogFor.QtyRemaining; // Qty available before this borrow
-    entry.Qty = Math.abs(requestedQty);
+    // Prepare log entry data for activityStore
+    const logEntryData = {
+      UserID: entry.UserID,
+      UserName: entry.UserName,
+      UserSpecs: entry.UserSpecs, // e.g., Batch or Class
+      Action: "Borrowed", // This will be set by activityStore.addActivity, but good to be explicit
+      ItemID: entry.ItemID,
+      ItemName: item.ItemName, // Use item name from inventory for consistency
+      ItemSpecs: item.ItemSpecs, // Use item specs from inventory
+      Qty: requestedQty,
+      Timestamp: entry.Timestamp || new Date().toLocaleString()
+    };
 
-    // 2. Add the new "Borrowed" activity to the log
-    const activityAddResult = await addActivity(entry);
+    const activityAddResult = addActivity(logEntryData); // activityStore.addActivity is synchronous now
     if (!activityAddResult || !activityAddResult.success) {
       return { success: false, error: `Failed to add borrow activity: ${activityAddResult.error || 'Unknown error'}` };
     }
 
-    // 3. Get the complete and updated activity log
-    const completeActivityLog = await getActivityLog();
+    // Update inventory stock
+    const stockUpdateResult = updateItemStock(entry.ItemID, -requestedQty); // Pass negative quantity for borrow
 
-    // 4. Update the inventory's ActualStock and QtyRemaining based on the complete log
-    const finalInventoryUpdateResult = await updateInventoryAfterActivity(entry.ItemID, completeActivityLog);
-
-    if (!finalInventoryUpdateResult || !finalInventoryUpdateResult.success || !finalInventoryUpdateResult.updatedItem) {
-      // This is a critical failure. Consider if the activity log entry should be rolled back.
-      // For now, returning an error is the primary action.
-      console.error("CRITICAL: Activity logged but inventory update failed for item:", entry.ItemID);
-      return { success: false, error: `Activity logged but inventory update failed: ${finalInventoryUpdateResult.error || 'Unknown error'}` };
+    if (!stockUpdateResult || !stockUpdateResult.success) {
+      // Potentially roll back activity log? For now, log critical error and inform user.
+      console.error(`CRITICAL: Activity logged (ID: ${activityAddResult.newActivity.activityID}) but inventory stock update failed for item: ${entry.ItemID}`);
+      return {
+        success: false,
+        error: `Borrow activity logged, but failed to update item stock. Please check inventory. Error: ${stockUpdateResult.error || 'Unknown error'}`
+      };
     }
 
-    return { 
-      success: true, 
+    return {
+      success: true,
       message: "Borrowing successful and inventory updated.",
-      updatedItem: finalInventoryUpdateResult.updatedItem,
+      updatedItem: stockUpdateResult.updatedItem,
       activity: activityAddResult.newActivity
     };
 
   } catch (error) {
-    console.error("Error in add-activity handler:", error);
+    console.error("Error in add-activity (borrow) handler:", error);
     return { success: false, error: error.message };
   }
 });
 
 ipcMain.handle("get-activity-log", async () => getActivityLog());
 
+// This handler is now SOLELY for processing returns.
 ipcMain.handle("record-staff-action", async (event, details) => {
+  // details from frontend: { staffUser, itemData, qtyToProcess, originalBorrowActivityID, notes }
   try {
-    const qtyConfirmedReceived = Math.abs(Number(details.qtyToProcess) || 0);
-    // Ensure originalBorrowedQty is a number and defaults reasonably if not provided.
-    const originalBorrowedQty = Math.abs(Number(details.originalBorrowedQty) || (qtyConfirmedReceived)); 
-
-    let overallSuccess = true;
-    let errors = [];
-    let finalQtyRemainingForItem;
-
-    // 1. Record "Returned" action if applicable
-    if (qtyConfirmedReceived > 0) {
-      const returnedActivityDetails = {
-        UserID: details.staffUser.UserID,
-        UserName: details.staffUser.UserName,
-        UserSpecs: details.staffUser.UserSpecs,
-        ItemID: details.itemData.ItemID,
-        ItemName: details.itemData.ItemName,
-        ItemSpecs: details.itemData.ItemSpecs,
-        Qty: qtyConfirmedReceived,
-        originalBorrowActivityID: details.originalBorrowActivityID,
-        Notes: details.notes // User's note applies to the returned part
-      };
-      // QtyRemainingForItem will be set after all processing by updateInventoryAfterActivity
-      const returnResult = await recordStaffReturn(returnedActivityDetails);
-      if (!returnResult.success) {
-        overallSuccess = false;
-        errors.push(returnResult.error || "Failed to record return action.");
-      }
+    const qtyReturned = Number(details.qtyToProcess);
+    if (isNaN(qtyReturned) || qtyReturned <= 0) {
+      return { success: false, error: "Invalid quantity to return." };
     }
 
-    // 2. Record "Lost" action for the difference - REMOVED as per new logic
-    // const qtyImplicitlyLost = originalBorrowedQty - qtyConfirmedReceived;
-    // if (qtyImplicitlyLost > 0) {
-    //   const lostActivityDetails = {
-    //     UserID: details.staffUser.UserID,
-    //     UserName: details.staffUser.UserName,
-    //     UserSpecs: details.staffUser.UserSpecs,
-    //     ItemID: details.itemData.ItemID,
-    //     ItemName: details.itemData.ItemName,
-    //     ItemSpecs: details.itemData.ItemSpecs,
-    //     Qty: qtyImplicitlyLost,
-    //     originalBorrowActivityID: details.originalBorrowActivityID,
-    //     Notes: `Implicitly recorded as lost. Original note: ${details.notes || ""}`
-    //   };
-    //   const lostResult = await recordStaffLost(lostActivityDetails);
-    //   if (!lostResult.success) {
-    //     overallSuccess = false;
-    //     errors.push(lostResult.error || "Failed to record implicit lost action.");
-    //   }
-    // }
-
-    // 3. Update inventory based on ALL activities (including new ones)
-    // Fetch the activity log *after* the new "Returned" activity (if any) has been added.
-    const currentActivityLog = await getActivityLog();
-    const inventoryUpdateResult = await updateInventoryAfterActivity(details.itemData.ItemID, currentActivityLog);
-
-    if (!inventoryUpdateResult || !inventoryUpdateResult.success || !inventoryUpdateResult.updatedItem) {
-      overallSuccess = false;
-      errors.push(inventoryUpdateResult.error || "Failed to update inventory after return action.");
-      finalQtyRemainingForItem = 'Error updating inventory'; 
-    } else {
-      finalQtyRemainingForItem = inventoryUpdateResult.updatedItem.QtyRemaining;
+    // Ensure itemData is present and has ItemID
+    if (!details.itemData || details.itemData.ItemID === undefined) {
+        return { success: false, error: "Item data is missing or invalid." };
     }
 
-    if (overallSuccess) {
+    // Ensure staffUser is present
+    if (!details.staffUser || !details.staffUser.UserID) {
+        return { success: false, error: "Staff user details are missing." };
+    }
+
+    const currentInventory = getInventory();
+    const itemBeingReturned = currentInventory.find(i => String(i.ItemID) === String(details.itemData.ItemID));
+
+    if (!itemBeingReturned) {
+        // This case should ideally not happen if itemData comes from a valid source, but good to check.
+        return { success: false, error: `Item ID ${details.itemData.ItemID} not found in inventory for return.` };
+    }
+
+    // Prepare log entry data for the return
+    const returnLogDetails = {
+      UserID: details.staffUser.UserID, // Staff UserID
+      UserName: details.staffUser.UserName, // Staff UserName
+      UserSpecs: details.staffUser.UserSpecs, // Staff Role/Specs
+      Action: "Returned", // Set by activityStore.recordStaffReturn
+      ItemID: details.itemData.ItemID,
+      ItemName: itemBeingReturned.ItemName, // Use name from current inventory
+      ItemSpecs: itemBeingReturned.ItemSpecs, // Use specs from current inventory
+      Qty: qtyReturned,
+      Timestamp: new Date().toLocaleString(),
+      originalBorrowActivityID: details.originalBorrowActivityID,
+      Notes: details.notes || ""
+    };
+
+    const returnLogResult = recordStaffReturn(returnLogDetails); // activityStore.recordStaffReturn is synchronous
+    if (!returnLogResult || !returnLogResult.success) {
+      return { success: false, error: `Failed to record return activity: ${returnLogResult.error || 'Unknown error'}` };
+    }
+
+    // Update inventory stock (add back the returned quantity)
+    const stockUpdateResult = updateItemStock(details.itemData.ItemID, qtyReturned); // Positive quantity
+
+    if (!stockUpdateResult || !stockUpdateResult.success) {
+      console.error(`CRITICAL: Return activity logged (ID: ${returnLogResult.newActivity.activityID}) but inventory stock update failed for item: ${details.itemData.ItemID}`);
       return { 
-        success: true, 
-        message: "Staff action processed successfully. Inventory updated.",
-        qtyRemaining: finalQtyRemainingForItem,
-        // Optionally, include the specific returned activity or the whole log if useful for frontend
-        // returnedActivity: returnResult ? returnResult.newActivity : null,
-        // activityLog: currentActivityLog
+        success: false,
+        error: `Return activity logged, but failed to update item stock. Please check inventory. Error: ${stockUpdateResult.error || 'Unknown error'}`
       };
-    } else {
-      // If errors occurred, particularly if the return action failed but we proceeded to inventory update.
-      // It's better to return a consolidated error message.
-      return { success: false, error: errors.join("; ") || "Unknown error during staff action processing." };
     }
+
+    return {
+      success: true,
+      message: "Return processed successfully and inventory updated.",
+      updatedItem: stockUpdateResult.updatedItem,
+      activity: returnLogResult.newActivity
+    };
 
   } catch (error) {
-    console.error(`Error in record-staff-action handler:`, error);
+    console.error("Error in record-staff-action (return) handler:", error);
     return { success: false, error: error.message };
   }
 });
@@ -274,9 +331,21 @@ function createWindow() {
         label: 'Export',
         submenu: [
             {
-            label: 'Export Activity',
+            label: 'Export All Activities', // Changed label
             click: async () => {
-              await handleExportActivityLog(win);
+              await handleExportActivityLog(win); // This now calls exportAllActivitiesLog
+            }
+            },
+            {
+            label: 'Export Returned Activities', // New menu item
+            click: async () => {
+              await handleExportReturnedActivitiesLog(win);
+            }
+            },
+            {
+            label: 'Export Inventory', // New menu item for inventory
+            click: async () => {
+              await handleExportInventory(win);
             }
             }
         ]
